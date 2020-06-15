@@ -79,9 +79,14 @@ public class NamesrvStartup {
             return null;
         }
 
+        // NameServer 业务参数
         final NamesrvConfig namesrvConfig = new NamesrvConfig();
+        // NettyServer 网络参数
         final NettyServerConfig nettyServerConfig = new NettyServerConfig();
         nettyServerConfig.setListenPort(9876);
+
+        // 解析启动时把指定的配置文件或启动命令中的选项值，填充到 nameServerConfig nettyServerConfig 对象
+        // 使用 -c configFile 通过-c命令指定配置文件的路径 使用“ --属性名 属性值”，例如一listenPort 9876
         if (commandLine.hasOption('c')) {
             String file = commandLine.getOptionValue('c');
             if (file != null) {
@@ -107,7 +112,7 @@ public class NamesrvStartup {
 
         MixAll.properties2Object(ServerUtil.commandLine2Properties(commandLine), namesrvConfig);
 
-        if (null == namesrvConfig.getRocketmqHome()) {
+            if (null == namesrvConfig.getRocketmqHome()) {
             System.out.printf("Please set the %s variable in your environment to match the location of the RocketMQ installation%n", MixAll.ROCKETMQ_HOME_ENV);
             System.exit(-2);
         }
@@ -123,6 +128,7 @@ public class NamesrvStartup {
         MixAll.printObjectProperties(log, namesrvConfig);
         MixAll.printObjectProperties(log, nettyServerConfig);
 
+        // 根据启动属性创建 NamesrvController 实例，并初始化该实例 NameServerController 实例为 NameServer 核心控制器
         final NamesrvController controller = new NamesrvController(namesrvConfig, nettyServerConfig);
 
         // remember all configs to prevent discard
@@ -143,6 +149,8 @@ public class NamesrvStartup {
             System.exit(-3);
         }
 
+        // 注册 JVM 钩子函数并启动服务器， 以便监昕 Broker 、消息生产者的网络请求
+        // 一种优雅停机的方式就是注册 JVM 钩子函数， JVM 进程关闭之前，先将线程池关闭 ，及时释放资源
         Runtime.getRuntime().addShutdownHook(new ShutdownHookThread(log, new Callable<Void>() {
             @Override
             public Void call() throws Exception {
