@@ -48,24 +48,128 @@ import org.apache.rocketmq.remoting.common.RemotingUtil;
 /**
  * 负责缓存整个集群的 broker 信息，以及 topic 和 queue 的配置信息，RouteInfoManager 的所有数据通过 HashMap 缓存在内存中，通过读写锁来控制并发更新。数据更新时会将数据保存到文件中，重启后可恢复数据。
  * 因为 nameserv 是用 brokername 来区分 broker，所以注册到同一个 nameserv 上的多个集群，brokerName 和 topic 也是不能重复的。
+ *
+ * RocketMQ 基于订阅发布机制 一个 Topic 拥有多个消息队，一个Broker 为每一主题默认创建四个读队列四个写队列。多个 Broker 组成一个集群，BrokerName 由相同的多台 Broker 组成 Master-Slave 架构，brokerId 为 0 代表 Master 大于 表示 Slave
+ * BrokerLivelnfo lastUpdateTimestamp 存储上次收到 Broker 心跳包的时间
+ *
  */
 public class RouteInfoManager {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.NAMESRV_LOGGER_NAME);
     private final static long BROKER_CHANNEL_EXPIRED_TIME = 1000 * 60 * 2;
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
-    // 1、Topic 和 broker 的 Map，保存了 topic 在每个 broker 上的读写 Queue 的个数以及读写权限
+
+    /**
+     * cluster:cl      -----M-S------  cluster: cl
+     * brokerName:broker-a   ----M-S------   brokerName:broker-a
+     * brokerld:O          ----M-S------     brokerld:1
+     *
+     * cluster:cl      -----M-S------  cluster: cl
+     * brokerName:broker-b   ----M-S------   brokerName:broker-b
+     * brokerld:O          ----M-S------     brokerld:l
+     */
+
+    // Topic 和 broker 的 Map，保存了 topic 在每个 broker 上的读写 Queue 的个数以及读写权限
+    // Topic 消息队列路由信息，消息发送时根据路由表进行负载均衡
+    /**
+     * topicQueueTable {
+     *    "topic1": [
+     *       {
+     *         "brokerName”：”broker-a ”，
+     *         "readQueueNums”: 4'
+     *         "readQueueNums”: 4'
+     *         ”perm” : 6, ／／读写权限，具体含义精参考 PermName
+     *         "topicSyncFlag": 0 // topic 同步标记，具体含义请参考TopicSysFlag
+     *       },
+     *       {
+     *         "brokerName”：”broker-b”，
+     *         "readQueueNums”: 4'
+     *         "readQueueNums”: 4'
+     *         ”perm” : 6, ／／读写权限，具体含义精参考 PermName
+     *         "topicSyncFlag": 0 // topic 同步标记，具体含义请参考TopicSysFlag
+     *       }
+     *   ],
+     *   "topic other": []
+     * }
+     */
     private final HashMap<String/* topic */, List<QueueData>> topicQueueTable;
-    // 2、注册到 nameserv 上的所有 Broker，按照 brokername 分组
+
+    // 注册到 nameserv 上的所有 Broker，按照 brokername 分组
     // Broker 使用 brokerName 来标识主从关系，同一个 brokerName下只能有一个 master。
+    // Broker 基础信息， 包括 brokerName、所属集群名称 主备 Broker 地址
+    /**
+     * brokerAddrTable {
+     *    "broker-a": {
+     *       {
+     *         "cluster”：”c1”，
+     *         "brokerName”: "broker-a"
+     *         "brokerAddrs”: {
+     *              0:"192.168.56.1:10000",
+     *              1:"192.168.56.2:10000",
+     *         }
+     *       },
+     *       {
+     *         "cluster”：”c1”，
+     *         "brokerName”: "broker-a"
+     *         "brokerAddrs”: {
+     *              0:"192.168.56.3:10000",
+     *              1:"192.168.56.4:10000",
+     *         }
+     *       }
+     * }
+     */
     private final HashMap<String/* brokerName */, BrokerData> brokerAddrTable;
-    // 3、broker 的集群对应关系
+
+    // broker 的集群对应关系
     // 使用 clusterName 来判断多个 broker 是不是属于同一个集群。对于同一个 cluster 下的 broker，producer 在发送消息时只会选择发送给其中一个。
+    // Broker 集群信息，存储集群中所有 Broker 名称
+    /**
+     * clusterAddrTable: {
+     *     "c1": [{"broker-a","broker-b"}]
+     * }
+     */
     private final HashMap<String/* clusterName */, Set<String/* brokerName */>> clusterAddrTable;
-    // 4、broker 最新的心跳时间和配置版本号
+
+    // broker 最新的心跳时间和配置版本号
     // nameserv 会记录 brokerAddr 的最后活跃时间，如果超过一定时间没有心跳或其他数据交互，会认为 broker 已下线。
     // nameserv 和 broker 上都会保存 DataVersion 字段，当 broker 配置有变更时，DataVersion 会+1。下次心跳时 nameserv 通过这个字段来判断配置是否有变更。
+    // Broker 状态信息 NameServer 每次收到心跳包时会替换该信息
+    /**
+     * brokerLiveTable: {
+     *    "192.168.56.1:10000": {
+     *       {
+     *         "lastUpdateTimestamp”：”1518270318980”，
+     *         "dataVersion”: "versionObl"
+     *         "channel”: "channelObj",
+     *         "haServerAddr":"192.168.56.1:10000"
+     *       },
+     *    "192.168.56.2:10000": {
+     *       {
+     *          "lastUpdateTimestamp”：”1518270318980”，
+     *          "dataVersion”: "versionObl"
+     *          "channel”: "channelObj",
+     *          "haServerAddr":"192.168.56.2:10000"
+     *      },
+     *    "192.168.56.3:10000": {
+     *      {
+     *         "lastUpdateTimestamp”：”1518270318980”，
+     *               "dataVersion”: "versionObl"
+     *              "channel”: "channelObj",
+     *               "haServerAddr":"192.168.56.3:10000"
+     *           },
+     *    "192.168.56.4:10000": {
+     *             {
+     *               "lastUpdateTimestamp”：”1518270318980”，
+     *               "dataVersion”: "versionObl"
+     *              "channel”: "channelObj",
+     *               "haServerAddr":"192.168.56.4:10000"
+     *           },
+     * }
+     */
     private final HashMap<String/* brokerAddr */, BrokerLiveInfo> brokerLiveTable;
-    // 5、broker 和 FilterServer 的对应关系
+
+
+    // broker 和 FilterServer 的对应关系
+    // Broker 上的 FilterServer 列表，用于类模式消息过滤
     private final HashMap<String/* brokerAddr */, List<String>/* Filter Server */> filterServerTable;
 
     public RouteInfoManager() {
