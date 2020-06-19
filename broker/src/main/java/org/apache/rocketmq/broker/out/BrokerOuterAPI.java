@@ -124,19 +124,26 @@ public class BrokerOuterAPI {
         final boolean compressed) {
 
         final List<RegisterBrokerResult> registerBrokerResultList = Lists.newArrayList();
+        // 遍历 nameServer 列表， Broker 消息服务器依次向 NameServer 发送心跳包
         List<String> nameServerAddressList = this.remotingClient.getNameServerAddressList();
         if (nameServerAddressList != null && nameServerAddressList.size() > 0) {
-
+            // 封装请求包头（Header)
             final RegisterBrokerRequestHeader requestHeader = new RegisterBrokerRequestHeader();
+            // broker 地址
             requestHeader.setBrokerAddr(brokerAddr);
+            // brokerld O:Master 大于0: Slave
             requestHeader.setBrokerId(brokerId);
+            // broker名称
             requestHeader.setBrokerName(brokerName);
+            // 集群名称
             requestHeader.setClusterName(clusterName);
+            // master 地址，初次请求时该值为空， slave 向 Nameserver 注册后返回
             requestHeader.setHaServerAddr(haServerAddr);
             requestHeader.setCompressed(compressed);
 
             RegisterBrokerBody requestBody = new RegisterBrokerBody();
             requestBody.setTopicConfigSerializeWrapper(topicConfigWrapper);
+            // 消息过滤服务器列表
             requestBody.setFilterServerList(filterServerList);
             final byte[] body = requestBody.encode(compressed);
             final int bodyCrc32 = UtilAll.crc32(body);

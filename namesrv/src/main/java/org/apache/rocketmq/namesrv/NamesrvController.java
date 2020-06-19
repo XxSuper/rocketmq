@@ -97,7 +97,7 @@ public class NamesrvController {
         // 注册 DefaultRequestProcessor，所有的客户端请求都会转给这个 Processor 来处理（所有的客户端请求都会转到 DefaultRequestProcessor 来处理）
         this.registerProcessor();
 
-        // 启动定时调度，每10秒钟扫描所有 Broker，检查存活状态，移除处于不激活状态的 Broker
+        // 启动定时调度，每10秒钟扫描所有 Broker 从 brokerLiveTable 缓存，检查存活状态，移除处于不激活状态的 Broker
         this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
 
             @Override

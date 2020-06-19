@@ -543,13 +543,20 @@ public class RouteInfoManager {
         return null;
     }
 
+    /**
+     * 如果连续 120s 没有收到心跳包，NameServ 将移除该 Broker 的路由信息，同时关闭 Socket 连接
+     */
     public void scanNotActiveBroker() {
+        // 遍历 brokerLiveTable 缓存
         Iterator<Entry<String, BrokerLiveInfo>> it = this.brokerLiveTable.entrySet().iterator();
         while (it.hasNext()) {
             Entry<String, BrokerLiveInfo> next = it.next();
+            // 如果连续 120s 没有收到心跳包
             long last = next.getValue().getLastUpdateTimestamp();
             if ((last + BROKER_CHANNEL_EXPIRED_TIME) < System.currentTimeMillis()) {
+                // 关闭 Socket 连接
                 RemotingUtil.closeChannel(next.getValue().getChannel());
+                // 移除该 Broker 的路由信息
                 it.remove();
                 log.warn("The broker channel expired, {} {}ms", next.getKey(), BROKER_CHANNEL_EXPIRED_TIME);
                 this.onChannelDestroy(next.getKey(), next.getValue().getChannel());
