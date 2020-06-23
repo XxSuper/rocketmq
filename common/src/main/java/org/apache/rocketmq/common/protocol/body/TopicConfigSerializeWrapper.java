@@ -23,6 +23,10 @@ import org.apache.rocketmq.common.DataVersion;
 import org.apache.rocketmq.common.TopicConfig;
 import org.apache.rocketmq.remoting.protocol.RemotingSerializable;
 
+/**
+ * TopicConfigSerializeWrapper 内部封装的是 TopicConfigManager 中的 topicConfigTable ，内部存储的是 Broker 启动时默认的 一些Topic
+ * Broker 中 Topic 默认存储在 $｛RockerHome｝/store/confg/topic.json 中
+ */
 public class TopicConfigSerializeWrapper extends RemotingSerializable {
     private ConcurrentMap<String, TopicConfig> topicConfigTable =
         new ConcurrentHashMap<String, TopicConfig>();

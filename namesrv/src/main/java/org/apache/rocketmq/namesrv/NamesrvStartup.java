@@ -19,12 +19,14 @@ package org.apache.rocketmq.namesrv;
 import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.joran.JoranConfigurator;
 import ch.qos.logback.core.joran.spi.JoranException;
+
 import java.io.BufferedInputStream;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Properties;
 import java.util.concurrent.Callable;
+
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.Option;
 import org.apache.commons.cli.Options;
@@ -86,7 +88,7 @@ public class NamesrvStartup {
         nettyServerConfig.setListenPort(9876);
 
         // 解析启动时把指定的配置文件或启动命令中的选项值，填充到 nameServerConfig nettyServerConfig 对象
-        // 使用 -c configFile 通过-c命令指定配置文件的路径 使用“ --属性名 属性值”，例如一listenPort 9876
+        // 使用 -c configFile 通过-c命令指定配置文件的路径 使用“ --属性名 属性值”，例如--listenPort 9876
         if (commandLine.hasOption('c')) {
             String file = commandLine.getOptionValue('c');
             if (file != null) {
@@ -112,7 +114,7 @@ public class NamesrvStartup {
 
         MixAll.properties2Object(ServerUtil.commandLine2Properties(commandLine), namesrvConfig);
 
-            if (null == namesrvConfig.getRocketmqHome()) {
+        if (null == namesrvConfig.getRocketmqHome()) {
             System.out.printf("Please set the %s variable in your environment to match the location of the RocketMQ installation%n", MixAll.ROCKETMQ_HOME_ENV);
             System.exit(-2);
         }

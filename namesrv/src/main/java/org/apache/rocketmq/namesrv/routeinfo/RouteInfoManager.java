@@ -216,6 +216,19 @@ public class RouteInfoManager {
         return topicList.encode();
     }
 
+    /**
+     * NameServer 与 Broker 保持长连接， Broker 状态存储在 brokerLiveTable 中，NameServer 每收到一个心跳包，将更新 brokerLiveTable 中关于 Broker 的状态信息以及路由表（ topicQueueTable brokerAddrTable brokerLiveTable filterServerTable)
+     * 更新上述路由表（HashTable）使用了锁粒度较少的读写锁，允许多个消息发送者（ producer ）并发读，保证消息发送时的高并发。但同一时刻 NameServer 只处理一个 Broker 心跳包，多个心跳包请求串行执行
+     * @param clusterName
+     * @param brokerAddr
+     * @param brokerName
+     * @param brokerId
+     * @param haServerAddr
+     * @param topicConfigWrapper
+     * @param filterServerList
+     * @param channel
+     * @return
+     */
     public RegisterBrokerResult registerBroker(
         final String clusterName,
         final String brokerAddr,
@@ -228,6 +241,7 @@ public class RouteInfoManager {
         RegisterBrokerResult result = new RegisterBrokerResult();
         try {
             try {
+                // 路由注册需要加写锁，防止并发修改 RoutelnfoManager 中的路由表，首先判断 Broker 所属集群是否存在，如果不存在，则创建，然后将 broker 名加入到集群 Broker 集合中
                 this.lock.writeLock().lockInterruptibly();
 
                 Set<String> brokerNames = this.clusterAddrTable.get(clusterName);
@@ -239,6 +253,7 @@ public class RouteInfoManager {
 
                 boolean registerFirst = false;
 
+                // 维护 BrokerData 信息，首先从 brokerAddrTable 根据 BrokerName 尝试获取 Broker 信息 ，如不存在，则新建 BrokerData 并放入 brokerAddrTable，registerFirst 设置为true ;如果存在，直接替换原有的，registerFirst 设置为false，表示非第一次注册
                 BrokerData brokerData = this.brokerAddrTable.get(brokerName);
                 if (null == brokerData) {
                     registerFirst = true;
@@ -259,10 +274,13 @@ public class RouteInfoManager {
                 String oldAddr = brokerData.getBrokerAddrs().put(brokerId, brokerAddr);
                 registerFirst = registerFirst || (null == oldAddr);
 
+                // 如果 Broker 为 Master，并且 Broker Topic 配置信息发生变化或者是首次注册
                 if (null != topicConfigWrapper
                     && MixAll.MASTER_ID == brokerId) {
                     if (this.isBrokerTopicConfigChanged(brokerAddr, topicConfigWrapper.getDataVersion())
                         || registerFirst) {
+                        // 则创建或更新 Topic 路由元数据，填充 topicQueueTable，其实就是为默认主题自动注册路由信息，其中包含 MixAII.DEFAULT_TOPIC 的路由信息，当消息生产者发送主题时
+                        // 如果该主题未创建并且 BrokerConfig 的 autoCreateTopicEnable 为 true 时，将返回 MixAII.DEFAULT_TOPIC 的路由信息
                         ConcurrentMap<String, TopicConfig> tcTable =
                             topicConfigWrapper.getTopicConfigTable();
                         if (tcTable != null) {
@@ -273,6 +291,7 @@ public class RouteInfoManager {
                     }
                 }
 
+                // 更新 BrokerLivelnfo ，存活 Broker 信息表， BrokeLivelnfo 是执行路由删除的重要依据
                 BrokerLiveInfo prevBrokerLiveInfo = this.brokerLiveTable.put(brokerAddr,
                     new BrokerLiveInfo(
                         System.currentTimeMillis(),
@@ -283,6 +302,7 @@ public class RouteInfoManager {
                     log.info("new broker registered, {} HAServer: {}", brokerAddr, haServerAddr);
                 }
 
+                // 注册 Broker 的过滤器 Server 地址列表，一个 Broker 上会关联多 FilterServer 消息过滤服务器
                 if (filterServerList != null) {
                     if (filterServerList.isEmpty()) {
                         this.filterServerTable.remove(brokerAddr);
@@ -291,6 +311,7 @@ public class RouteInfoManager {
                     }
                 }
 
+                // 如果此 Broker 为从节点，则需要查找 Broker Master 的节点信息，并更新对应 masterAddr 属性
                 if (MixAll.MASTER_ID != brokerId) {
                     String masterAddr = brokerData.getBrokerAddrs().get(MixAll.MASTER_ID);
                     if (masterAddr != null) {
@@ -332,6 +353,7 @@ public class RouteInfoManager {
     }
 
     private void createAndUpdateQueueData(final String brokerName, final TopicConfig topicConfig) {
+        // 根据 TopicConfig 创建 QueueData 数据结构 ，然后更新 topicQueueTable
         QueueData queueData = new QueueData();
         queueData.setBrokerName(brokerName);
         queueData.setWriteQueueNums(topicConfig.getWriteQueueNums());

@@ -58,6 +58,9 @@ import org.apache.rocketmq.remoting.netty.NettyClientConfig;
 import org.apache.rocketmq.remoting.netty.NettyRemotingClient;
 import org.apache.rocketmq.remoting.protocol.RemotingCommand;
 
+/**
+ * 每个请求 RocketMQ 都会定义 一个 RequestCode ，然后在服务端会对应相应的网络处理器( processor 包中)，只需整库搜索 RquestCode 即可找到相应的处理逻辑
+ */
 public class BrokerOuterAPI {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.BROKER_LOGGER_NAME);
     private final RemotingClient remotingClient;
@@ -111,6 +114,20 @@ public class BrokerOuterAPI {
         this.remotingClient.updateNameServerAddressList(lst);
     }
 
+    /**
+     * 该方法主要是遍历 nameServer 列表， Broker 消息服务器依次向 nameServer 发送心跳包
+     * @param clusterName
+     * @param brokerAddr
+     * @param brokerName
+     * @param brokerId
+     * @param haServerAddr
+     * @param topicConfigWrapper
+     * @param filterServerList
+     * @param oneway
+     * @param timeoutMills
+     * @param compressed
+     * @return
+     */
     public List<RegisterBrokerResult> registerBrokerAll(
         final String clusterName,
         final String brokerAddr,
@@ -142,6 +159,7 @@ public class BrokerOuterAPI {
             requestHeader.setCompressed(compressed);
 
             RegisterBrokerBody requestBody = new RegisterBrokerBody();
+            // 主题配置
             requestBody.setTopicConfigSerializeWrapper(topicConfigWrapper);
             // 消息过滤服务器列表
             requestBody.setFilterServerList(filterServerList);
@@ -149,11 +167,13 @@ public class BrokerOuterAPI {
             final int bodyCrc32 = UtilAll.crc32(body);
             requestHeader.setBodyCrc32(bodyCrc32);
             final CountDownLatch countDownLatch = new CountDownLatch(nameServerAddressList.size());
+            // 遍历所有 NameServer 列表
             for (final String namesrvAddr : nameServerAddressList) {
                 brokerOuterExecutor.execute(new Runnable() {
                     @Override
                     public void run() {
                         try {
+                            // 分别向 NameServer 注册
                             RegisterBrokerResult result = registerBroker(namesrvAddr,oneway, timeoutMills,requestHeader,body);
                             if (result != null) {
                                 registerBrokerResultList.add(result);

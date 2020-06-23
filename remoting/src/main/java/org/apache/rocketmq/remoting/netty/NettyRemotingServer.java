@@ -215,6 +215,10 @@ public class NettyRemotingServer extends NettyRemotingAbstract implements Remoti
                                 new NettyDecoder(),
                                 new IdleStateHandler(0, 0, nettyServerConfig.getServerChannelMaxIdleTimeSeconds()),
                                 connectionManageHandler,
+                                // netty handler 处理器，代码处理链如下：
+                                // NettyServerHandler.channelRead0() -> NettyRemotingAbstract.processMessageReceived() -> NettyRemotingAbstract.processRequestCommand() -> NettyRemotingAbstract.defaultRequestProcessor.getObject1().processRequest(ctx, cmd)
+                                // NettyRemotingAbstract.defaultRequestProcessor 由 NamesrvController#initialize()#registerProcessor() 进行注册 DefaultRequestProcessor
+                                // 最终网络请求处理类为 DefaultRequestProcessor
                                 serverHandler
                             );
                     }

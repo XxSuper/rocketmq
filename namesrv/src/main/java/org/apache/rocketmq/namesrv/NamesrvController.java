@@ -40,6 +40,12 @@ import org.apache.rocketmq.srvutil.FileWatchService;
 
 /**
  * NameServer 主要作用是为消息生产者和消息消费者提供关于主题 Topic 的路由信息，那么 NameServer 需要存储路由的基础信息，还要能够管理 Broker 节点，包括路由注册、路由删除等功能
+ *
+ * Broker 消息服务器在启动时向所有 NameServer 注册，消息生产者（Producer）在发送消息之前先从 NameServer 获取 Broker 服务器地址列表，然后根据负载算法从列表中选择一台消息服务器进行消息发送
+ * NameServer 与每台 Broker 服务器保持长连接，并间隔 30s 检查 Broker 是否存活，如果检测到 Broker 宕机，则从路由注册表中将其移除。但是路由变化不会马上通知消息生产者，
+ * 为什么要这样设计呢？这是为了降低 NameServer 实现的复杂性，在消息发送端提供容错机制来保证消息发送的高可用性，
+ * NameServer 本身的高可用可通过部署多台 NameServer 服务器来实现，但彼此之间互不通信，也就是 NameServer 服务器之间在某一时刻的数据并不会完全相同，但这对消息发送不会造成任何影响，
+ * 这也是 RocketMQ NameServer 设计的一个亮点， RocketMQ NameServer 设计追求简单高效
  */
 public class NamesrvController {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.NAMESRV_LOGGER_NAME);
@@ -85,9 +91,9 @@ public class NamesrvController {
      * @return
      */
     public boolean initialize() {
-        // 初始化 KVConfigManager
+        // 加载 KV 配置，初始化 KVConfigManager
         this.kvConfigManager.load();
-        // 初始化 netty server（初始化 nameserv 的 Server，用来接收客户端请求）
+        // 创建 NettyServer 网络处理对象，初始化 netty server（初始化 nameserv 的 Server，用来接收客户端请求）
         this.remotingServer = new NettyRemotingServer(this.nettyServerConfig, this.brokerHousekeepingService);
 
         // 客户端请求处理的线程池
@@ -163,7 +169,7 @@ public class NamesrvController {
             this.remotingServer.registerDefaultProcessor(new ClusterTestRequestProcessor(this, namesrvConfig.getProductEnvName()),
                 this.remotingExecutor);
         } else {
-
+            // DefaultRequestProcessor 网络处理器解析请求类型，如果请求类型为 RequestCode.REGISTER_BROKER，则请求最终转发到 RoutelnfoManager#registerBroker
             this.remotingServer.registerDefaultProcessor(new DefaultRequestProcessor(this), this.remotingExecutor);
         }
     }
