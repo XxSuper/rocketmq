@@ -29,6 +29,7 @@ public class MQClientManager {
     private final static InternalLogger log = ClientLogger.getLog();
     private static MQClientManager instance = new MQClientManager();
     private AtomicInteger factoryIndexGenerator = new AtomicInteger();
+    // 维护一个 MQClientInstance 缓存表，也就是同一个 clientId 只会创建一个 MQClientInstance
     private ConcurrentMap<String/* clientId */, MQClientInstance> factoryTable =
         new ConcurrentHashMap<String, MQClientInstance>();
 
@@ -45,7 +46,9 @@ public class MQClientManager {
     }
 
     public MQClientInstance getOrCreateMQClientInstance(final ClientConfig clientConfig, RPCHook rpcHook) {
+        // 创建 clientId
         String clientId = clientConfig.buildMQClientId();
+        // 从实例缓存表中获取，不存在则创建（单例）
         MQClientInstance instance = this.factoryTable.get(clientId);
         if (null == instance) {
             instance =

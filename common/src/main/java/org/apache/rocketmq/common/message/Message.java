@@ -22,12 +22,24 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 
+/**
+ * rocketmq 消息封装类
+ */
 public class Message implements Serializable {
     private static final long serialVersionUID = 8445773977080406428L;
 
+    // 所属 topic
     private String topic;
+    // 消息Flag（RocketMQ不做处理）
     private int flag;
+
+    // 扩展属性
+    // tag ：消息 TAG，用于消息过滤
+    // keys: Message 索引键，多个用空格隔开， RocketMQ 可以根据这些 key 快速检索到消息
+    // waitStoreMsgOK ：消息发送时是否等消息存储完成后再返回
+    // delayTimeLeve 消息延迟级别，用于定时消息或消息重试
     private Map<String, String> properties;
+    // 消息体
     private byte[] body;
     private String transactionId;
 
@@ -43,12 +55,14 @@ public class Message implements Serializable {
         this.flag = flag;
         this.body = body;
 
+        // 消息 TAG 用于消息过滤
         if (tags != null && tags.length() > 0)
             this.setTags(tags);
 
+        // Message 索引键，多个空格用逗号隔开，rocketMQ可以根据这些 keys 快速检索到消息
         if (keys != null && keys.length() > 0)
             this.setKeys(keys);
-
+        // 消息发送时是否等消息存储完成后返回
         this.setWaitStoreMsgOK(waitStoreMsgOK);
     }
 
@@ -146,6 +160,7 @@ public class Message implements Serializable {
     }
 
     public void setDelayTimeLevel(int level) {
+        // 消息延迟级别，用于定时消息或者消息重试
         this.putProperty(MessageConst.PROPERTY_DELAY_TIME_LEVEL, String.valueOf(level));
     }
 

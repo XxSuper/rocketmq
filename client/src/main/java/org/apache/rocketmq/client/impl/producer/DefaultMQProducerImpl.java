@@ -179,15 +179,18 @@ public class DefaultMQProducerImpl implements MQProducerInner {
         switch (this.serviceState) {
             case CREATE_JUST:
                 this.serviceState = ServiceState.START_FAILED;
-
+                // 检查 productGroup 是否符合要求
                 this.checkConfig();
 
+                // 改变生产者 instanceName 为进程 ID，如果 instanceName 为默认值 DEFAULT 的话， RocketMQ 会自动将 instance 设置为进程 ID
                 if (!this.defaultMQProducer.getProducerGroup().equals(MixAll.CLIENT_INNER_PRODUCER_GROUP)) {
                     this.defaultMQProducer.changeInstanceNameToPID();
                 }
 
+                // 创建 MQClientInstance 实例，整个 JVM 实例中只存在一个 MQClientManager 实例
                 this.mQClientFactory = MQClientManager.getInstance().getOrCreateMQClientInstance(this.defaultMQProducer, rpcHook);
 
+                // 向 MQClientlnstance 注册，将当前生产者加入到 MQClientlnstance 管理中（ConcurrentMap<String/* group */, MQProducerInner> producerTable），方便后续调用网络请求、进行心跳检测等
                 boolean registerOK = mQClientFactory.registerProducer(this.defaultMQProducer.getProducerGroup(), this);
                 if (!registerOK) {
                     this.serviceState = ServiceState.CREATE_JUST;
@@ -198,6 +201,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
 
                 this.topicPublishInfoTable.put(this.defaultMQProducer.getCreateTopicKey(), new TopicPublishInfo());
 
+                // 启动 MQClientlnstance，如果 MQClientlnstance 已经启动 ，则本次启动不会真正执行
                 if (startFactory) {
                     mQClientFactory.start();
                 }
@@ -217,8 +221,10 @@ public class DefaultMQProducerImpl implements MQProducerInner {
                 break;
         }
 
+        //  向所有的 broker 发送心跳
         this.mQClientFactory.sendHeartbeatToAllBrokerWithLock();
 
+        // 扫描过期的请求
         this.timer.scheduleAtFixedRate(new TimerTask() {
             @Override
             public void run() {
