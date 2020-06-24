@@ -341,7 +341,8 @@ public class DefaultRequestProcessor implements NettyRequestProcessor {
     }
 
     /**
-     * 查询路由信息
+     * 路由发现
+     * RocketMQ 路由发现是非实时的，当 Topic 路由出现变化后， NameServer 不主动推送给客户端是由客户端定时拉取主题最新的路由。根据主题名称拉取路由信息的命令编码为： GET_ROUTEINTO_BY_TOPIC
      * @param ctx
      * @param request
      * @return
@@ -349,28 +350,32 @@ public class DefaultRequestProcessor implements NettyRequestProcessor {
      */
     public RemotingCommand getRouteInfoByTopic(ChannelHandlerContext ctx,
         RemotingCommand request) throws RemotingCommandException {
-
+        // 创建返回 response 对象
         final RemotingCommand response = RemotingCommand.createResponseCommand(null);
+        // 解析 requestHeader
         final GetRouteInfoRequestHeader requestHeader =
             (GetRouteInfoRequestHeader) request.decodeCommandCustomHeader(GetRouteInfoRequestHeader.class);
 
+        // 调用 RouterlnfoManager 的方法，从路由 topicQueueTable、brokerAddrTable、filterServerTable 中分别填充 TopicRouteData 中的 List<QueuData＞、 List<BrokerData＞和 filterServer 过滤服务器地址表
         TopicRouteData topicRouteData = this.namesrvController.getRouteInfoManager().pickupTopicRouteData(requestHeader.getTopic());
 
+        // 如果找到主题对应的路由信息并且该主题为顺序消息，则从 NameServer KVconfig 中获取关于顺序消息相关的配置填充路由信息
         if (topicRouteData != null) {
+            // 如果是顺序消息，则从 NameServer KVconfig 中获取关于顺序消息相关的配置填充路由信息
             if (this.namesrvController.getNamesrvConfig().isOrderMessageEnable()) {
                 String orderTopicConf =
                     this.namesrvController.getKvConfigManager().getKVConfig(NamesrvUtil.NAMESPACE_ORDER_TOPIC_CONFIG,
                         requestHeader.getTopic());
                 topicRouteData.setOrderTopicConf(orderTopicConf);
             }
-
+            // 将 topicRouteData 进行编译放入 response
             byte[] content = topicRouteData.encode();
             response.setBody(content);
             response.setCode(ResponseCode.SUCCESS);
             response.setRemark(null);
             return response;
         }
-
+        // 如果找不到路由信息，CODE 则使用 TOPIC_NOT_EXISTS ，表示没有找到对应的路由
         response.setCode(ResponseCode.TOPIC_NOT_EXIST);
         response.setRemark("No topic route info in name server for the topic: " + requestHeader.getTopic()
             + FAQUrl.suggestTodo(FAQUrl.APPLY_TOPIC_URL));

@@ -104,6 +104,8 @@ public class NamesrvController {
         this.registerProcessor();
 
         // 启动定时调度，每10秒钟扫描所有 Broker 从 brokerLiveTable 缓存，检查存活状态，移除处于不激活状态的 Broker
+        // Name Server 会每隔 1Os 扫描 brokerLiveTable 状态表，如果 BrokerLive 的 lastUpdateTimestamp 的时间戳距当前时间超过 120s ，则认为 Broker 失效，移除该 Broker,
+        // 关闭与 Broker 的连接，并同时更新 topicQueueTable brokerAddrTable brokerLiveTable filterServerTable
         this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
 
             @Override
