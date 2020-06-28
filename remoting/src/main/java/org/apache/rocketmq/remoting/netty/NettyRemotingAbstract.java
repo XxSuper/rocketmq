@@ -405,9 +405,11 @@ public abstract class NettyRemotingAbstract {
             final ResponseFuture responseFuture = new ResponseFuture(channel, opaque, timeoutMillis, null, null);
             this.responseTable.put(opaque, responseFuture);
             final SocketAddress addr = channel.remoteAddress();
+            // 请求 NameServer
             channel.writeAndFlush(request).addListener(new ChannelFutureListener() {
                 @Override
                 public void operationComplete(ChannelFuture f) throws Exception {
+                    // 连接完成
                     if (f.isSuccess()) {
                         responseFuture.setSendRequestOK(true);
                         return;
@@ -422,6 +424,7 @@ public abstract class NettyRemotingAbstract {
                 }
             });
 
+            // 内部使用了countDownLatch.await()， 会在监听到完成后 responseFuture.putResponse(null)，进行 countDownLatch.countDown()
             RemotingCommand responseCommand = responseFuture.waitResponse(timeoutMillis);
             if (null == responseCommand) {
                 if (responseFuture.isSendRequestOK()) {
@@ -434,6 +437,7 @@ public abstract class NettyRemotingAbstract {
 
             return responseCommand;
         } finally {
+            // 从未响应的缓存中移除
             this.responseTable.remove(opaque);
         }
     }

@@ -165,12 +165,14 @@ public class MQClientInstance {
     public static TopicPublishInfo topicRouteData2TopicPublishInfo(final String topic, final TopicRouteData route) {
         TopicPublishInfo info = new TopicPublishInfo();
         info.setTopicRouteData(route);
+        // 顺序消息配置内容不为空
         if (route.getOrderTopicConf() != null && route.getOrderTopicConf().length() > 0) {
             String[] brokers = route.getOrderTopicConf().split(";");
             for (String broker : brokers) {
                 String[] item = broker.split(":");
                 int nums = Integer.parseInt(item[1]);
                 for (int i = 0; i < nums; i++) {
+                    // item[0] 为 brokerName，item[1] 为 queueId
                     MessageQueue mq = new MessageQueue(topic, item[0], i);
                     info.getMessageQueueList().add(mq);
                 }
@@ -178,18 +180,23 @@ public class MQClientInstance {
 
             info.setOrderTopic(true);
         } else {
+            // 顺序消息配置内容为空
             List<QueueData> qds = route.getQueueDatas();
             Collections.sort(qds);
+            // 循环遍历路由信息的 QueueData 信息，，如果队列 没有写权限，则继续遍历下一个 QueueData
             for (QueueData qd : qds) {
                 if (PermName.isWriteable(qd.getPerm())) {
                     BrokerData brokerData = null;
+                    // 遍历 topic 分布的 broker 元数据
                     for (BrokerData bd : route.getBrokerDatas()) {
+                        // 根据 brokerName 找到 brokerData 信息
                         if (bd.getBrokerName().equals(qd.getBrokerName())) {
                             brokerData = bd;
                             break;
                         }
                     }
 
+                    // 找不到或没有找到 Master 节点，则遍历下一个 QueueData
                     if (null == brokerData) {
                         continue;
                     }
@@ -198,6 +205,7 @@ public class MQClientInstance {
                         continue;
                     }
 
+                    // 根据写队列个数，根据 topic ＋ 序号创建 MessageQueue ，填充 topicPublishlnfo 的 List<QuueMessage> 完成消息发送的路由查找
                     for (int i = 0; i < qd.getWriteQueueNums(); i++) {
                         MessageQueue mq = new MessageQueue(topic, qd.getBrokerName(), i);
                         info.getMessageQueueList().add(mq);
@@ -613,9 +621,12 @@ public class MQClientInstance {
             if (this.lockNamesrv.tryLock(LOCK_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)) {
                 try {
                     TopicRouteData topicRouteData;
+                    // 如果 isDefault 为 true ，则使用默认主题去查询
                     if (isDefault && defaultMQProducer != null) {
+                        // 默认根据 MixAll.AUTO_CREATE_TOPIC_KEY_TOPIC topic 去查询
                         topicRouteData = this.mQClientAPIImpl.getDefaultTopicRouteInfoFromNameServer(defaultMQProducer.getCreateTopicKey(),
                             1000 * 3);
+                        // 如果查询到路由信息，则替换路由信息中读写队列个数为消息生产者默认的队列个数（defaultTopicQueueNums）
                         if (topicRouteData != null) {
                             for (QueueData data : topicRouteData.getQueueDatas()) {
                                 int queueNums = Math.min(defaultMQProducer.getDefaultTopicQueueNums(), data.getReadQueueNums());
@@ -624,10 +635,14 @@ public class MQClientInstance {
                             }
                         }
                     } else {
+                        //  如果 isDefault 为 false ，则使用参数 topic 去查询
                         topicRouteData = this.mQClientAPIImpl.getTopicRouteInfoFromNameServer(topic, 1000 * 3);
                     }
+                    // 如果路由信息找到，与本地缓存中的路由信息进行对比，判断路由信息是否发了改变， 如果未发生变化，则直接返回 false
                     if (topicRouteData != null) {
+                        // 本地缓存中的路由信息
                         TopicRouteData old = this.topicRouteTable.get(topic);
+                        // NameServer 返回的路由信息与本地缓存中的路由信息进行对比
                         boolean changed = topicRouteDataIsChange(old, topicRouteData);
                         if (!changed) {
                             changed = this.isNeedUpdateTopicRouteInfo(topic);
@@ -636,14 +651,17 @@ public class MQClientInstance {
                         }
 
                         if (changed) {
+                            // topic 信息改变
                             TopicRouteData cloneTopicRouteData = topicRouteData.cloneTopicRouteData();
 
+                            // 将 topic 信息放入 brokerAddrTable 缓存
                             for (BrokerData bd : topicRouteData.getBrokerDatas()) {
                                 this.brokerAddrTable.put(bd.getBrokerName(), bd.getBrokerAddrs());
                             }
 
                             // Update Pub info
                             {
+                                // 根据 topicRouteData 中的 List<QueueData> 转换成问 topicPublishInfo 的 List<MessageQueue> 列表
                                 TopicPublishInfo publishInfo = topicRouteData2TopicPublishInfo(topic, topicRouteData);
                                 publishInfo.setHaveTopicRouterInfo(true);
                                 Iterator<Entry<String, MQProducerInner>> it = this.producerTable.entrySet().iterator();
@@ -651,6 +669,7 @@ public class MQClientInstance {
                                     Entry<String, MQProducerInner> entry = it.next();
                                     MQProducerInner impl = entry.getValue();
                                     if (impl != null) {
+                                        // 更新该 MQClientInstance 所管辖的所有消息发送关于 topic 的路由信息
                                         impl.updateTopicPublishInfo(topic, publishInfo);
                                     }
                                 }
@@ -673,6 +692,7 @@ public class MQClientInstance {
                             return true;
                         }
                     } else {
+                        // 如果未查询到路由信息，则返回 false，表示路由信息未变化
                         log.warn("updateTopicRouteInfoFromNameServer, getTopicRouteInfoFromNameServer return null, Topic: {}", topic);
                     }
                 } catch (MQClientException e) {

@@ -316,6 +316,7 @@ public class DefaultMQProducer extends ClientConfig implements MQProducer {
 
     /**
      * 同步发送消息，具体发送到主题中的哪个消息队列由负载算法决定
+     * 消息发送流程：验证消息、查找路由 消息发送 （包含异常处理机制）
      * Send message in synchronous mode. This method returns only when the sending procedure totally completes. </p>
      *
      * <strong>Warn:</strong> this method has internal retry-mechanism, that is, internal implementation will retry

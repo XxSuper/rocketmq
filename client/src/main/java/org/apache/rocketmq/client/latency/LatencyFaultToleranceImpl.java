@@ -31,10 +31,13 @@ public class LatencyFaultToleranceImpl implements LatencyFaultTolerance<String> 
 
     @Override
     public void updateFaultItem(final String name, final long currentLatency, final long notAvailableDuration) {
+        // 根据 broker 名称从 缓存表中获取 Faultitem，如果找到则更新 Faultltem
         FaultItem old = this.faultItemTable.get(name);
         if (null == old) {
+            // 否则创建 Faultltem
             final FaultItem faultItem = new FaultItem(name);
             faultItem.setCurrentLatency(currentLatency);
+            // startTimeStamp 为当前系统时间加上需要规避的时长。startTimeStamp 是判断 broker 当前是否可用的直接依据
             faultItem.setStartTimestamp(System.currentTimeMillis() + notAvailableDuration);
 
             old = this.faultItemTable.putIfAbsent(name, faultItem);
@@ -96,9 +99,17 @@ public class LatencyFaultToleranceImpl implements LatencyFaultTolerance<String> 
             '}';
     }
 
+    /**
+     * FaultItem 失败条目（规避规则条目）
+     */
     class FaultItem implements Comparable<FaultItem> {
+        // 条目唯一键，这里为 brokerName
         private final String name;
+
+        // currentLatency startTimeStamp 被 volatile 修饰
+        // 本次消息发送延迟
         private volatile long currentLatency;
+        // 故障规避开始时间
         private volatile long startTimestamp;
 
         public FaultItem(final String name) {

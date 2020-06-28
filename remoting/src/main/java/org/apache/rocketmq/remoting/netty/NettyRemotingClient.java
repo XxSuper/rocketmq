@@ -362,7 +362,9 @@ public class NettyRemotingClient extends NettyRemotingAbstract implements Remoti
     public RemotingCommand invokeSync(String addr, final RemotingCommand request, long timeoutMillis)
         throws InterruptedException, RemotingConnectException, RemotingSendRequestException, RemotingTimeoutException {
         long beginStartTime = System.currentTimeMillis();
+        // 获取 channel
         final Channel channel = this.getAndCreateChannel(addr);
+        // channel 是有效的
         if (channel != null && channel.isActive()) {
             try {
                 doBeforeRpcHooks(addr, request);
@@ -370,6 +372,7 @@ public class NettyRemotingClient extends NettyRemotingAbstract implements Remoti
                 if (timeoutMillis < costTime) {
                     throw new RemotingTimeoutException("invokeSync call timeout");
                 }
+                // 执行同步请求 NameServer
                 RemotingCommand response = this.invokeSyncImpl(channel, request, timeoutMillis - costTime);
                 doAfterRpcHooks(RemotingHelper.parseChannelRemoteAddr(channel), request, response);
                 return response;
@@ -386,6 +389,7 @@ public class NettyRemotingClient extends NettyRemotingAbstract implements Remoti
                 throw e;
             }
         } else {
+            // 如果 channel 无效则关闭
             this.closeChannel(addr, channel);
             throw new RemotingConnectException(addr);
         }
@@ -405,6 +409,7 @@ public class NettyRemotingClient extends NettyRemotingAbstract implements Remoti
     }
 
     private Channel getAndCreateNameserverChannel() throws RemotingConnectException, InterruptedException {
+        // 从已被选中缓存中获取
         String addr = this.namesrvAddrChoosed.get();
         if (addr != null) {
             ChannelWrapper cw = this.channelTables.get(addr);
@@ -413,9 +418,11 @@ public class NettyRemotingClient extends NettyRemotingAbstract implements Remoti
             }
         }
 
+        // 获取地址列表
         final List<String> addrList = this.namesrvAddrList.get();
         if (this.lockNamesrvChannel.tryLock(LOCK_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)) {
             try {
+                // 同上从已被选中缓存中获取，再次确认是否有 channel
                 addr = this.namesrvAddrChoosed.get();
                 if (addr != null) {
                     ChannelWrapper cw = this.channelTables.get(addr);
@@ -426,13 +433,16 @@ public class NettyRemotingClient extends NettyRemotingAbstract implements Remoti
 
                 if (addrList != null && !addrList.isEmpty()) {
                     for (int i = 0; i < addrList.size(); i++) {
+                        // hash 算法获取请求地址
                         int index = this.namesrvIndex.incrementAndGet();
                         index = Math.abs(index);
                         index = index % addrList.size();
                         String newAddr = addrList.get(index);
 
+                        // 塞入被选择缓存
                         this.namesrvAddrChoosed.set(newAddr);
                         log.info("new name server is chosen. OLD: {} , NEW: {}. namesrvIndex = {}", addr, newAddr, namesrvIndex);
+                        // 创建 channel，有则返回，无则创建
                         Channel channelNew = this.createChannel(newAddr);
                         if (channelNew != null) {
                             return channelNew;
@@ -451,6 +461,7 @@ public class NettyRemotingClient extends NettyRemotingAbstract implements Remoti
     }
 
     private Channel createChannel(final String addr) throws InterruptedException {
+        // 从缓存中获取
         ChannelWrapper cw = this.channelTables.get(addr);
         if (cw != null && cw.isOK()) {
             return cw.getChannel();
@@ -459,22 +470,27 @@ public class NettyRemotingClient extends NettyRemotingAbstract implements Remoti
         if (this.lockChannelTables.tryLock(LOCK_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)) {
             try {
                 boolean createNewConnection;
+                // 再次确认从缓存中获取
                 cw = this.channelTables.get(addr);
                 if (cw != null) {
-
+                    // 如果创建成功直接返回
                     if (cw.isOK()) {
                         return cw.getChannel();
                     } else if (!cw.getChannelFuture().isDone()) {
+                        // 连接未响应，置 createNewConnection 为 false
                         createNewConnection = false;
                     } else {
+                        // 创建失败从缓存中移除
                         this.channelTables.remove(addr);
                         createNewConnection = true;
                     }
                 } else {
+                    // 创建新连接
                     createNewConnection = true;
                 }
 
                 if (createNewConnection) {
+                    // 创建新连接
                     ChannelFuture channelFuture = this.bootstrap.connect(RemotingHelper.string2SocketAddress(addr));
                     log.info("createChannel: begin to connect remote host[{}] asynchronously", addr);
                     cw = new ChannelWrapper(channelFuture);
@@ -490,6 +506,7 @@ public class NettyRemotingClient extends NettyRemotingAbstract implements Remoti
         }
 
         if (cw != null) {
+            // 阻塞等待连接建立
             ChannelFuture channelFuture = cw.getChannelFuture();
             if (channelFuture.awaitUninterruptibly(this.nettyClientConfig.getConnectTimeoutMillis())) {
                 if (cw.isOK()) {

@@ -1361,13 +1361,17 @@ public class MQClientAPIImpl {
 
     public TopicRouteData getTopicRouteInfoFromNameServer(final String topic, final long timeoutMillis,
         boolean allowTopicNotExist) throws MQClientException, InterruptedException, RemotingTimeoutException, RemotingSendRequestException, RemotingConnectException {
+        // 组装请求头
         GetRouteInfoRequestHeader requestHeader = new GetRouteInfoRequestHeader();
         requestHeader.setTopic(topic);
 
+        // 组装请求提体
         RemotingCommand request = RemotingCommand.createRequestCommand(RequestCode.GET_ROUTEINTO_BY_TOPIC, requestHeader);
 
+        // netty 请求 NameServer
         RemotingCommand response = this.remotingClient.invokeSync(null, request, timeoutMillis);
         assert response != null;
+        // 解析响应
         switch (response.getCode()) {
             case ResponseCode.TOPIC_NOT_EXIST: {
                 if (allowTopicNotExist && !topic.equals(MixAll.AUTO_CREATE_TOPIC_KEY_TOPIC)) {
@@ -1379,6 +1383,7 @@ public class MQClientAPIImpl {
             case ResponseCode.SUCCESS: {
                 byte[] body = response.getBody();
                 if (body != null) {
+                    // 解析响应体
                     return TopicRouteData.decode(body, TopicRouteData.class);
                 }
             }
