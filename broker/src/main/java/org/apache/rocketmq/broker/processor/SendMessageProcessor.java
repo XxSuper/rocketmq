@@ -181,6 +181,7 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
             maxReconsumeTimes = requestHeader.getMaxReconsumeTimes();
         }
 
+        // 如果消息重试次数超过允许的最大重试次数，消息将进入 DLD 延迟队列，延迟队列主题： %DLQ%＋消费组名
         if (msgExt.getReconsumeTimes() >= maxReconsumeTimes
             || delayLevel < 0) {
             newTopic = MixAll.getDLQTopic(requestHeader.getGroup());

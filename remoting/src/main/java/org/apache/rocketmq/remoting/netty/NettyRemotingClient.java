@@ -189,6 +189,7 @@ public class NettyRemotingClient extends NettyRemotingAbstract implements Remoti
                 }
             });
 
+        // 定时扫描请求响应包
         this.timer.scheduleAtFixedRate(new TimerTask() {
             @Override
             public void run() {
@@ -636,6 +637,7 @@ public class NettyRemotingClient extends NettyRemotingAbstract implements Remoti
 
         @Override
         protected void channelRead0(ChannelHandlerContext ctx, RemotingCommand msg) throws Exception {
+            // 服务端向客户端发送消息处理
             processMessageReceived(ctx, msg);
         }
     }

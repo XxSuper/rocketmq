@@ -329,6 +329,7 @@ public class BrokerController {
                 Executors.newFixedThreadPool(this.brokerConfig.getConsumerManageThreadPoolNums(), new ThreadFactoryImpl(
                     "ConsumerManageThread_"));
 
+            // 注册请求处理类
             this.registerProcessor();
 
             final long initialDelay = UtilAll.computeNextMorningTimeMillis() - System.currentTimeMillis();
@@ -853,6 +854,7 @@ public class BrokerController {
             this.messageStore.start();
         }
 
+        // 启动 broker 的 NettyServer
         if (this.remotingServer != null) {
             this.remotingServer.start();
         }

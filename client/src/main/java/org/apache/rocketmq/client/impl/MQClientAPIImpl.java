@@ -431,6 +431,25 @@ public class MQClientAPIImpl {
         return sendMessage(addr, brokerName, msg, requestHeader, timeoutMillis, communicationMode, null, null, null, 0, context, producer);
     }
 
+    /**
+     * 根据消息发送方式，同步、异步、单向方式进行网络传输
+     * @param addr
+     * @param brokerName
+     * @param msg
+     * @param requestHeader
+     * @param timeoutMillis
+     * @param communicationMode
+     * @param sendCallback
+     * @param topicPublishInfo
+     * @param instance
+     * @param retryTimesWhenSendFailed
+     * @param context
+     * @param producer
+     * @return
+     * @throws RemotingException
+     * @throws MQBrokerException
+     * @throws InterruptedException
+     */
     public SendResult sendMessage(
         final String addr,
         final String brokerName,
@@ -445,32 +464,47 @@ public class MQClientAPIImpl {
         final SendMessageContext context,
         final DefaultMQProducerImpl producer
     ) throws RemotingException, MQBrokerException, InterruptedException {
+        // 执行开始时间
         long beginStartTime = System.currentTimeMillis();
+        // 请求信息
         RemotingCommand request = null;
+        // 获取消息类型
         String msgType = msg.getProperty(MessageConst.PROPERTY_MESSAGE_TYPE);
+        // 判断是否是重复消息
         boolean isReply = msgType != null && msgType.equals(MixAll.REPLY_MESSAGE_FLAG);
         if (isReply) {
             if (sendSmartMsg) {
+                // 构建 SendMessageRequestHeaderV2 请求头
                 SendMessageRequestHeaderV2 requestHeaderV2 = SendMessageRequestHeaderV2.createSendMessageRequestHeaderV2(requestHeader);
+                // 设置 RemotingCommand 的 code 为 RequestCode.SEND_REPLY_MESSAGE_V2
                 request = RemotingCommand.createRequestCommand(RequestCode.SEND_REPLY_MESSAGE_V2, requestHeaderV2);
             } else {
+                // 设置 RemotingCommand 的 code 为 RequestCode.SEND_REPLY_MESSAGE
                 request = RemotingCommand.createRequestCommand(RequestCode.SEND_REPLY_MESSAGE, requestHeader);
             }
         } else {
             if (sendSmartMsg || msg instanceof MessageBatch) {
                 SendMessageRequestHeaderV2 requestHeaderV2 = SendMessageRequestHeaderV2.createSendMessageRequestHeaderV2(requestHeader);
+                // 设置 RemotingCommand 的 code
                 request = RemotingCommand.createRequestCommand(msg instanceof MessageBatch ? RequestCode.SEND_BATCH_MESSAGE : RequestCode.SEND_MESSAGE_V2, requestHeaderV2);
             } else {
+                // 设置 RemotingCommand 的 code
                 request = RemotingCommand.createRequestCommand(RequestCode.SEND_MESSAGE, requestHeader);
             }
         }
+        // 设置请求消息体
         request.setBody(msg.getBody());
 
+        // 根据消息发送方式，同步、异步、单向方式进行网络传输
         switch (communicationMode) {
             case ONEWAY:
+                // 单向发送是指消息生产者调用消息发送 API ，无须等待消息服务器返回本次消息发送结果，并且无须提供回调函数，表示消息发送压根就不关心本次消息发送是否成功，其实现原理与异步消息发送相同，只是消息发送客户端在收到响应结果后什么都不做而已，并且没有重试机制
                 this.remotingClient.invokeOneway(addr, request, timeoutMillis);
                 return null;
             case ASYNC:
+                // 消息异步发送是指消息生产者调用发送的 API 后，无须阻塞等待消息服务器返回本次消息发送结果，只需要提 个回调函数，供消息发送客户端在收到响应结果回调 异步方式相比同步方式，消息发送端的发送性能会显著提高，但为了保护消息服务器的负载压力，
+                // RocketMQ 对消息发送的异步消息进行了井发控制，通 参数 clientAsyncSemaphoreValue 来控制，默认为 65535 异步消息发送虽然也可以通过 DefaultMQProducer#retryTimes WhenSendAsyncFailed 属性来控制消息重试次数，但是重试的调用人 是在收到服务端
+                // 响应包时进行的，如果出现网络异常、网络超时等将不会重试异步发送
                 final AtomicInteger times = new AtomicInteger();
                 long costTimeAsync = System.currentTimeMillis() - beginStartTime;
                 if (timeoutMillis < costTimeAsync) {
@@ -484,6 +518,7 @@ public class MQClientAPIImpl {
                 if (timeoutMillis < costTimeSync) {
                     throw new RemotingTooMuchRequestException("sendMessage call timeout");
                 }
+                // netty 进行网络请求
                 return this.sendMessageSync(addr, brokerName, msg, timeoutMillis - costTimeSync, request);
             default:
                 assert false;

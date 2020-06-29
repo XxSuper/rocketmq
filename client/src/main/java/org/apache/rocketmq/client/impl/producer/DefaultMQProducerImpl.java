@@ -16,26 +16,6 @@
  */
 package org.apache.rocketmq.client.impl.producer;
 
-import java.io.IOException;
-import java.net.UnknownHostException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Random;
-import java.util.Set;
-import java.util.Timer;
-import java.util.TimerTask;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.rocketmq.client.QueryResult;
 import org.apache.rocketmq.client.Validators;
 import org.apache.rocketmq.client.common.ClientErrorCode;
@@ -51,34 +31,12 @@ import org.apache.rocketmq.client.impl.MQClientManager;
 import org.apache.rocketmq.client.impl.factory.MQClientInstance;
 import org.apache.rocketmq.client.latency.MQFaultStrategy;
 import org.apache.rocketmq.client.log.ClientLogger;
-import org.apache.rocketmq.client.producer.DefaultMQProducer;
-import org.apache.rocketmq.client.producer.LocalTransactionExecuter;
-import org.apache.rocketmq.client.producer.LocalTransactionState;
-import org.apache.rocketmq.client.producer.MessageQueueSelector;
-import org.apache.rocketmq.client.producer.RequestCallback;
-import org.apache.rocketmq.client.producer.RequestFutureTable;
-import org.apache.rocketmq.client.producer.RequestResponseFuture;
-import org.apache.rocketmq.client.producer.SendCallback;
-import org.apache.rocketmq.client.producer.SendResult;
-import org.apache.rocketmq.client.producer.SendStatus;
-import org.apache.rocketmq.client.producer.TransactionCheckListener;
-import org.apache.rocketmq.client.producer.TransactionListener;
-import org.apache.rocketmq.client.producer.TransactionMQProducer;
-import org.apache.rocketmq.client.producer.TransactionSendResult;
+import org.apache.rocketmq.client.producer.*;
 import org.apache.rocketmq.common.MixAll;
 import org.apache.rocketmq.common.ServiceState;
 import org.apache.rocketmq.common.UtilAll;
 import org.apache.rocketmq.common.help.FAQUrl;
-import org.apache.rocketmq.common.message.Message;
-import org.apache.rocketmq.common.message.MessageAccessor;
-import org.apache.rocketmq.common.message.MessageBatch;
-import org.apache.rocketmq.common.message.MessageClientIDSetter;
-import org.apache.rocketmq.common.message.MessageConst;
-import org.apache.rocketmq.common.message.MessageDecoder;
-import org.apache.rocketmq.common.message.MessageExt;
-import org.apache.rocketmq.common.message.MessageId;
-import org.apache.rocketmq.common.message.MessageQueue;
-import org.apache.rocketmq.common.message.MessageType;
+import org.apache.rocketmq.common.message.*;
 import org.apache.rocketmq.common.protocol.NamespaceUtil;
 import org.apache.rocketmq.common.protocol.ResponseCode;
 import org.apache.rocketmq.common.protocol.header.CheckTransactionStateRequestHeader;
@@ -93,6 +51,12 @@ import org.apache.rocketmq.remoting.exception.RemotingConnectException;
 import org.apache.rocketmq.remoting.exception.RemotingException;
 import org.apache.rocketmq.remoting.exception.RemotingTimeoutException;
 import org.apache.rocketmq.remoting.exception.RemotingTooMuchRequestException;
+
+import java.io.IOException;
+import java.net.UnknownHostException;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class DefaultMQProducerImpl implements MQProducerInner {
     private final InternalLogger log = ClientLogger.getLog();
@@ -590,18 +554,19 @@ public class DefaultMQProducerImpl implements MQProducerInner {
                     // 记录每次重试的 brokerName
                     brokersSent[times] = mq.getBrokerName();
                     try {
-                        //
                         beginTimestampPrev = System.currentTimeMillis();
                         if (times > 0) {
                             //Reset topic with namespace during resend.
                             msg.setTopic(this.defaultMQProducer.withNamespace(msg.getTopic()));
                         }
+                        // 判断消息发送是否超时
                         long costTime = beginTimestampPrev - beginTimestampFirst;
                         if (timeout < costTime) {
                             callTimeout = true;
                             break;
                         }
 
+                        // 消息发送
                         sendResult = this.sendKernelImpl(msg, mq, communicationMode, sendCallback, topicPublishInfo, timeout - costTime);
                         endTimestamp = System.currentTimeMillis();
                         this.updateFaultItem(mq.getBrokerName(), endTimestamp - beginTimestampPrev, false);
@@ -733,6 +698,20 @@ public class DefaultMQProducerImpl implements MQProducerInner {
         }
     }
 
+    /**
+     * 消息发送
+     * @param msg 待发送消息
+     * @param mq 消息将发送到该消息队列上
+     * @param communicationMode 消息发送模式 SYNC ASYNC ONEWAY
+     * @param sendCallback 异步消息回调函数
+     * @param topicPublishInfo 主题路由信息
+     * @param timeout 发送超时时间
+     * @return
+     * @throws MQClientException
+     * @throws RemotingException
+     * @throws MQBrokerException
+     * @throws InterruptedException
+     */
     private SendResult sendKernelImpl(final Message msg,
         final MessageQueue mq,
         final CommunicationMode communicationMode,
@@ -740,7 +719,10 @@ public class DefaultMQProducerImpl implements MQProducerInner {
         final TopicPublishInfo topicPublishInfo,
         final long timeout) throws MQClientException, RemotingException, MQBrokerException, InterruptedException {
         long beginStartTime = System.currentTimeMillis();
+        // 根据 MessageQueue 从 ConcurrentMap<String/* Broker Name */, HashMap<Long/* brokerId */, String/* address */>> brokerAddrTable 缓存中获取 Broker 的网络地址
         String brokerAddr = this.mQClientFactory.findBrokerAddressInPublish(mq.getBrokerName());
+        // 如果 MQClientInstance 的 brokerAddrTable 未缓存该 Broker 的信息，则从 NameServer 主动更新一次 topic 的路由信息。
+        // 如果路由更新后还是找不到 Broker 信息，则抛出 MQClientException 异常，提示 Broker 不存在
         if (null == brokerAddr) {
             tryToFindTopicPublishInfo(mq.getTopic());
             brokerAddr = this.mQClientFactory.findBrokerAddressInPublish(mq.getBrokerName());
@@ -748,10 +730,12 @@ public class DefaultMQProducerImpl implements MQProducerInner {
 
         SendMessageContext context = null;
         if (brokerAddr != null) {
+            // 获取到 brokerAddr
             brokerAddr = MixAll.brokerVIPChannel(this.defaultMQProducer.isSendMessageWithVIPChannel(), brokerAddr);
 
             byte[] prevBody = msg.getBody();
             try {
+                // 为消息分配全局唯一 id
                 //for MessageBatch,ID has been set in the generating process
                 if (!(msg instanceof MessageBatch)) {
                     MessageClientIDSetter.setUniqID(msg);
@@ -763,6 +747,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
                     topicWithNamespace = true;
                 }
 
+                // 如果消息体默认超过 4K，会对消息体采用 zip 压缩，并设置消息的系统标记为 MessageSysFlag.COMPRESSED_FLAG
                 int sysFlag = 0;
                 boolean msgBodyCompressed = false;
                 if (this.tryToCompressMessage(msg)) {
@@ -770,6 +755,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
                     msgBodyCompressed = true;
                 }
 
+                // 如果是事务 Prepared 消息，设置消息的系统标记为 MessageSysFlag.TRANSACTION_PREPARED_TYPE
                 final String tranMsg = msg.getProperty(MessageConst.PROPERTY_TRANSACTION_PREPARED);
                 if (tranMsg != null && Boolean.parseBoolean(tranMsg)) {
                     sysFlag |= MessageSysFlag.TRANSACTION_PREPARED_TYPE;
@@ -787,6 +773,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
                     this.executeCheckForbiddenHook(checkForbiddenContext);
                 }
 
+                // 如果注册了消息发送钩子函数， 则执行消息发送之前的增强逻辑。通过 DefaultMQProducerlmpl#registerSendMessageHook 注册钩子处理类，并且可以注册多个
                 if (this.hasSendMessageHook()) {
                     context = new SendMessageContext();
                     context.setProducer(this);
@@ -808,19 +795,32 @@ public class DefaultMQProducerImpl implements MQProducerInner {
                     this.executeSendMessageHookBefore(context);
                 }
 
+                // 构建消息发送请求包
                 SendMessageRequestHeader requestHeader = new SendMessageRequestHeader();
+                // 生产者组
                 requestHeader.setProducerGroup(this.defaultMQProducer.getProducerGroup());
+                // 主题名称
                 requestHeader.setTopic(msg.getTopic());
+                // 默认创建主题 Key
                 requestHeader.setDefaultTopic(this.defaultMQProducer.getCreateTopicKey());
+                // 该主题在单个 Broker 默认队列数
                 requestHeader.setDefaultTopicQueueNums(this.defaultMQProducer.getDefaultTopicQueueNums());
+                // 队列 ID （队列序号）
                 requestHeader.setQueueId(mq.getQueueId());
+                // 消息系统标记（MessageSysFlag）
                 requestHeader.setSysFlag(sysFlag);
+                // 消息发送时间
                 requestHeader.setBornTimestamp(System.currentTimeMillis());
+                // 消息标记（ RocketMQ 对消息中的 flag 不做任何处理供应用程序使用）
                 requestHeader.setFlag(msg.getFlag());
+                // 消息扩展属性
                 requestHeader.setProperties(MessageDecoder.messageProperties2String(msg.getProperties()));
+                // 消息重试次数
                 requestHeader.setReconsumeTimes(0);
                 requestHeader.setUnitMode(this.isUnitMode());
+                // 是否是批量消息
                 requestHeader.setBatch(msg instanceof MessageBatch);
+                // topic 是否以 MixAll.RETRY_GROUP_TOPIC_PREFIX 开头，如果是则从消息扩展属性中获取重试次数，并重新给 requestHeader 设置值
                 if (requestHeader.getTopic().startsWith(MixAll.RETRY_GROUP_TOPIC_PREFIX)) {
                     String reconsumeTimes = MessageAccessor.getReconsumeTime(msg);
                     if (reconsumeTimes != null) {
@@ -877,10 +877,13 @@ public class DefaultMQProducerImpl implements MQProducerInner {
                         break;
                     case ONEWAY:
                     case SYNC:
+                        // 同步消息发送
+                        // 判断是否超时
                         long costTimeSync = System.currentTimeMillis() - beginStartTime;
                         if (timeout < costTimeSync) {
                             throw new RemotingTooMuchRequestException("sendKernelImpl call timeout");
                         }
+                        // 发送消息
                         sendResult = this.mQClientFactory.getMQClientAPIImpl().sendMessage(
                             brokerAddr,
                             mq.getBrokerName(),
@@ -896,6 +899,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
                         break;
                 }
 
+                // 如果注册了消息发送钩子函数，执行 after 逻辑。注意，就算消息发送中发生 RemotingException MQBrokerException InterruptedException 时该方法也会执行
                 if (this.hasSendMessageHook()) {
                     context.setSendResult(sendResult);
                     this.executeSendMessageHookAfter(context);
@@ -933,6 +937,11 @@ public class DefaultMQProducerImpl implements MQProducerInner {
         return mQClientFactory;
     }
 
+    /**
+     * 如果消息体默认超过 4K，会对消息体采用 zip 压缩
+     * @param msg
+     * @return
+     */
     private boolean tryToCompressMessage(final Message msg) {
         if (msg instanceof MessageBatch) {
             //batch dose not support compressing right now

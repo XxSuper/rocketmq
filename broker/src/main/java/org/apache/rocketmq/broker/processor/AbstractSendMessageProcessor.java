@@ -162,8 +162,16 @@ public abstract class AbstractSendMessageProcessor implements NettyRequestProces
         return response;
     }
 
+    /**
+     * 检查消息发送是否合理
+     * @param ctx
+     * @param requestHeader
+     * @param response
+     * @return
+     */
     protected RemotingCommand msgCheck(final ChannelHandlerContext ctx,
         final SendMessageRequestHeader requestHeader, final RemotingCommand response) {
+        // 检查该 Broker 是否有写权限
         if (!PermName.isWriteable(this.brokerController.getBrokerConfig().getBrokerPermission())
             && this.brokerController.getTopicConfigManager().isOrderTopic(requestHeader.getTopic())) {
             response.setCode(ResponseCode.NO_PERMISSION);
@@ -171,6 +179,7 @@ public abstract class AbstractSendMessageProcessor implements NettyRequestProces
                 + "] sending message is forbidden");
             return response;
         }
+        // 检查该 Topic 可以进行消息发送，主要针对默认主题，默认主题不能发送消息，仅仅供路由查找
         if (!this.brokerController.getTopicConfigManager().isTopicCanSendMessage(requestHeader.getTopic())) {
             String errorMsg = "the topic[" + requestHeader.getTopic() + "] is conflict with system reserved words.";
             log.warn(errorMsg);
@@ -179,6 +188,9 @@ public abstract class AbstractSendMessageProcessor implements NettyRequestProces
             return response;
         }
 
+        // 在 NameServer 端存储主题的配置信息，默认路径：$｛ROCKET_HOME}/store/config/topic.json
+        // 主题存储信息：order 是否是顺序消息 perm ：权限码 readQueueNums ：读队列数量 writeQueueNums 写队列数量； topicName 主题名称，topicSysFlag : topic Flag 前版本暂为保留；topicFilterType ：主题过滤方式，当前版本仅支持 SINGLE_TAG
+        // 从缓存 ConcurrentMap<String, TopicConfig> topicConfigTable 中获取主题配置信息
         TopicConfig topicConfig =
             this.brokerController.getTopicConfigManager().selectTopicConfig(requestHeader.getTopic());
         if (null == topicConfig) {
@@ -215,6 +227,7 @@ public abstract class AbstractSendMessageProcessor implements NettyRequestProces
             }
         }
 
+        // 检查队列，如果队列不合法，返回错误码
         int queueIdInt = requestHeader.getQueueId();
         int idValid = Math.max(topicConfig.getWriteQueueNums(), topicConfig.getReadQueueNums());
         if (queueIdInt >= idValid) {
