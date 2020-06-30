@@ -440,39 +440,57 @@ public class MessageDecoder {
 
     public static byte[] encodeMessage(Message message) {
         //only need flag, body, properties
+        // 消息体
         byte[] body = message.getBody();
+        // 消息体长度
         int bodyLen = body.length;
+        // 消息扩展属性转为字符串
         String properties = messageProperties2String(message.getProperties());
+        // 扩展属性字节数组
         byte[] propertiesBytes = properties.getBytes(CHARSET_UTF8);
         //note properties length must not more than Short.MAX
+        // 扩展属性字节长度
         short propertiesLength = (short) propertiesBytes.length;
+        // 消息Flag（RocketMQ不做处理）
         int sysFlag = message.getFlag();
+        // 总长度（4个字节） + 魔数（4个字节） + BODYCRC（4个字节）+ FLAG（4个字节）+ body 长度（4个字节）+ body 体 + 属性长度（2个字节）+ 扩展属性体
         int storeSize = 4 // 1 TOTALSIZE
             + 4 // 2 MAGICCOD
             + 4 // 3 BODYCRC
             + 4 // 4 FLAG
             + 4 + bodyLen // 4 BODY
             + 2 + propertiesLength;
+        // 创建 storeSize 长度的 ByteBuffer
         ByteBuffer byteBuffer = ByteBuffer.allocate(storeSize);
+        // 加入 总长度 4 个字节到 byteBuffer 中（int 为 4 个字节）
         // 1 TOTALSIZE
         byteBuffer.putInt(storeSize);
 
+        // 加入 魔数 4 个字节到 byteBuffer 中（int 为 4 个字节）
         // 2 MAGICCODE
         byteBuffer.putInt(0);
 
+        // 加入 BODYCRC 4 个字节到 byteBuffer 中（int 为 4 个字节）
         // 3 BODYCRC
         byteBuffer.putInt(0);
 
+        // 加入 FLAG 4 个字节到 byteBuffer 中（int 为 4 个字节）
         // 4 FLAG
         int flag = message.getFlag();
         byteBuffer.putInt(flag);
 
+        // 加入 BODY 长度 4 个字节到 byteBuffer 中（int 为 4 个字节）
         // 5 BODY
         byteBuffer.putInt(bodyLen);
+
+        // 加入 BODY 体
         byteBuffer.put(body);
 
+        // 加入 扩展属性 长度 4 个字节到 byteBuffer 中（int 为 4 个字节）
         // 6 properties
         byteBuffer.putShort(propertiesLength);
+
+        // 加入 扩展属性 体
         byteBuffer.put(propertiesBytes);
 
         return byteBuffer.array();
@@ -511,13 +529,16 @@ public class MessageDecoder {
 
     public static byte[] encodeMessages(List<Message> messages) {
         //TO DO refactor, accumulate in one buffer, avoid copies
+        // 遍历每个消息，分别进行编码
         List<byte[]> encodedMessages = new ArrayList<byte[]>(messages.size());
         int allSize = 0;
         for (Message message : messages) {
+            // 对单个消息进行编码
             byte[] tmp = encodeMessage(message);
             encodedMessages.add(tmp);
             allSize += tmp.length;
         }
+        // 合并成一个消息体
         byte[] allBytes = new byte[allSize];
         int pos = 0;
         for (byte[] bytes : encodedMessages) {

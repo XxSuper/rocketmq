@@ -135,6 +135,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
         log.info("register sendMessage Hook, {}", hook.hookName());
     }
 
+    // 消息生产者启动
     public void start() throws MQClientException {
         this.start(true);
     }
@@ -167,6 +168,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
 
                 // 启动 MQClientlnstance，如果 MQClientlnstance 已经启动 ，则本次启动不会真正执行
                 if (startFactory) {
+                    // 与网络通信的相关方法封装
                     mQClientFactory.start();
                 }
 

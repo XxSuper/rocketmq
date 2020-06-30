@@ -928,6 +928,16 @@ public class DefaultMQProducer extends ClientConfig implements MQProducer {
         return this.defaultMQProducerImpl.send(batch(msgs));
     }
 
+    /**
+     * 批量消息发送
+     * @param msgs
+     * @param timeout
+     * @return
+     * @throws MQClientException
+     * @throws RemotingException
+     * @throws MQBrokerException
+     * @throws InterruptedException
+     */
     @Override
     public SendResult send(Collection<Message> msgs,
         long timeout) throws MQClientException, RemotingException, MQBrokerException, InterruptedException {
@@ -937,6 +947,7 @@ public class DefaultMQProducer extends ClientConfig implements MQProducer {
     @Override
     public SendResult send(Collection<Message> msgs,
         MessageQueue messageQueue) throws MQClientException, RemotingException, MQBrokerException, InterruptedException {
+        // 在消息发送端，调用 batch 方法，将一批消息封装成 MessageBatch 对象。
         return this.defaultMQProducerImpl.send(batch(msgs), messageQueue);
     }
 
@@ -978,14 +989,20 @@ public class DefaultMQProducer extends ClientConfig implements MQProducer {
     }
 
     private MessageBatch batch(Collection<Message> msgs) throws MQClientException {
+        // MessageBatch 继承自 Message 对象，MessageBatch 内部持有 List<Message> messages，批量消息发送与单条消息发送的处理流程完全一样
+        // MessageBatch 只需要将该集合中的每条消息的消息体 body 聚合成一个 byte[] 数组，在消息服务端能够从该 byte[] 数值中正确解析出消息即可
         MessageBatch msgBatch;
         try {
             msgBatch = MessageBatch.generateFromList(msgs);
+            // 检查每个消息的格式
             for (Message message : msgBatch) {
+                // 检查消息格式
                 Validators.checkMessage(message, this);
+                // 设置唯一键
                 MessageClientIDSetter.setUniqID(message);
                 message.setTopic(withNamespace(message.getTopic()));
             }
+            // 调用 messageBatch#encode() 方法填充到 body 域中
             msgBatch.setBody(msgBatch.encode());
         } catch (Exception e) {
             throw new MQClientException("Failed to initiate the MessageBatch", e);
