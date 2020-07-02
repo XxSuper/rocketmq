@@ -62,8 +62,9 @@ public class MessageDecoder {
         input.flip();
         int msgIDLength = addr.limit() == 8 ? 16 : 28;
         input.limit(msgIDLength);
-
+        // 写入地址
         input.put(addr);
+        // 写入偏移量
         input.putLong(offset);
 
         return UtilAll.bytes2string(input.array());

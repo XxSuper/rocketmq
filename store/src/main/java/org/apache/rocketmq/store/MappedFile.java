@@ -41,26 +41,47 @@ import org.apache.rocketmq.store.config.FlushDiskType;
 import org.apache.rocketmq.store.util.LibC;
 import sun.nio.ch.DirectBuffer;
 
+/**
+ * RocketMQ 通过使用内存映射文件来提高 IO 访问性能，无论是 CommitLog 、ConsumeQueue、IndexFile ，单个文件都被设计为固定长度，如果一个文件写满以后再创建一个新文件，文件名就为该文件第一条消息对应的全局物理偏移量
+ */
 public class MappedFile extends ReferenceResource {
+    // 内存页大小，4KB
     public static final int OS_PAGE_SIZE = 1024 * 4;
     protected static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.STORE_LOGGER_NAME);
 
     private static final AtomicLong TOTAL_MAPPED_VIRTUAL_MEMORY = new AtomicLong(0);
 
     private static final AtomicInteger TOTAL_MAPPED_FILES = new AtomicInteger(0);
+
+    // 上次写的位置
     protected final AtomicInteger wrotePosition = new AtomicInteger(0);
+
+    // 已经提交的位置
     protected final AtomicInteger committedPosition = new AtomicInteger(0);
+
+    // 已经刷盘的位置
     private final AtomicInteger flushedPosition = new AtomicInteger(0);
+    // 文件大小
     protected int fileSize;
+    // 该 MappedFile 文件对应的 channel
     protected FileChannel fileChannel;
     /**
      * Message will put to here first, and then reput to FileChannel if writeBuffer is not null.
+     * 如果启用了 TransientStorePool，则 writeBuffer 为从暂时存储池中借用的 buffer，此时存储对象（比如消息等）会先写入该 writeBuffer，然后commit 到 fileChannel，最后对 fileChannel 进行 flush 刷盘
      */
     protected ByteBuffer writeBuffer = null;
+
+    // 一个内存 ByteBuffer 池实现，如果启用了 TransientStorePool 则不为空
     protected TransientStorePool transientStorePool = null;
+    // 文件名
     private String fileName;
+
+    // 文件第一个消息的偏移，该文件中内容相对于整个文件的偏移，其实和文件名相同
     private long fileFromOffset;
+
+    // 该 MappedFile 对应的实际文件
     private File file;
+    // 通过 fileChannel.map 得到的可读写的内存映射 buffer，如果没有启用 TransientStorePool 则写数据时会写到该缓冲中，刷盘时直接调用该映射 buffer 的 force 函数，而不需要进行commit操作
     private MappedByteBuffer mappedByteBuffer;
     private volatile long storeTimestamp = 0;
     private boolean firstCreateInQueue = false;
@@ -69,9 +90,11 @@ public class MappedFile extends ReferenceResource {
     }
 
     public MappedFile(final String fileName, final int fileSize) throws IOException {
+        // 初始化文件
         init(fileName, fileSize);
     }
 
+    // 启用了暂存池
     public MappedFile(final String fileName, final int fileSize,
         final TransientStorePool transientStorePool) throws IOException {
         init(fileName, fileSize, transientStorePool);
@@ -141,25 +164,34 @@ public class MappedFile extends ReferenceResource {
         return TOTAL_MAPPED_VIRTUAL_MEMORY.get();
     }
 
+    // 启用了暂存池
     public void init(final String fileName, final int fileSize,
         final TransientStorePool transientStorePool) throws IOException {
         init(fileName, fileSize);
+        // writeBuffer 会被赋值，后续写入操作会优先
         this.writeBuffer = transientStorePool.borrowBuffer();
         this.transientStorePool = transientStorePool;
     }
 
     private void init(final String fileName, final int fileSize) throws IOException {
+        // 文件名
         this.fileName = fileName;
+        // 文件大小
         this.fileSize = fileSize;
         this.file = new File(fileName);
+        // 文件第一个消息的偏移
         this.fileFromOffset = Long.parseLong(this.file.getName());
         boolean ok = false;
 
+        // 创建父文件目录
         ensureDirOK(this.file.getParent());
 
         try {
+            // 内存文件映射
             this.fileChannel = new RandomAccessFile(this.file, "rw").getChannel();
+            // 文件映射到虚拟内存，MapMode.READ_WRITE：读/写，对得到的缓冲区的更改最终将写入文件；但该更改对映射到同一文件的其他程序不一定是可见的
             this.mappedByteBuffer = this.fileChannel.map(MapMode.READ_WRITE, 0, fileSize);
+            // 统计计数器更新
             TOTAL_MAPPED_VIRTUAL_MEMORY.addAndGet(fileSize);
             TOTAL_MAPPED_FILES.incrementAndGet();
             ok = true;
@@ -188,6 +220,7 @@ public class MappedFile extends ReferenceResource {
         return fileChannel;
     }
 
+    // 写入消息
     public AppendMessageResult appendMessage(final MessageExtBrokerInner msg, final AppendMessageCallback cb) {
         return appendMessagesInner(msg, cb);
     }
@@ -200,12 +233,18 @@ public class MappedFile extends ReferenceResource {
         assert messageExt != null;
         assert cb != null;
 
+        // 获取 MappedFile 当前写指针
         int currentPos = this.wrotePosition.get();
 
+        // currentPos 大于或等于文件大小则表明文件已写满，抛出 AppendMessageStatus.UNKNOWN_ERROR，如果 currentPos 小于文件大小，通过 slice() 方法创建一个与 MappedFile 的共
+        // 存区，并设置 position 为当前写指针
         if (currentPos < this.fileSize) {
+            // 如果 writeBuffer 不为空，则优先写入 writeBuffer（暂存池中获取的），否则写入 mappedByteBuffer，如果启用了暂存池 TransientStorePool 则 writeBuffer 会被初始化
+            // 否则 writeBuffer 为空，slice() 方法会返回一个新的 buffer，但是新的 buffer 和源对象 buffer 引用的是同一个
             ByteBuffer byteBuffer = writeBuffer != null ? writeBuffer.slice() : this.mappedByteBuffer.slice();
             byteBuffer.position(currentPos);
             AppendMessageResult result;
+            // 对消息进行编码，然后将编码后的数据写入得到的 byteBuffer 等待刷盘
             if (messageExt instanceof MessageExtBrokerInner) {
                 result = cb.doAppend(this.getFileFromOffset(), byteBuffer, this.fileSize - currentPos, (MessageExtBrokerInner) messageExt);
             } else if (messageExt instanceof MessageExtBatch) {
