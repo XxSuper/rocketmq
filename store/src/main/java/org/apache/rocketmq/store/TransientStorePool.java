@@ -32,15 +32,19 @@ import sun.nio.ch.DirectBuffer;
  * 采用双端队列 Deque 维护了一些列的预分配的 ByteBuffer，这些 ByteBuffer 都是在堆外分配的直接内存，DefaultMessageStore 会持有 TransientStorePool 对象实例，
  * 如果启动时配置了启用 transientStorePoolEnable，那么在 DefaultMessageStore 构造函数中会调用 TransientStorePool.init() 方法，预分配 ByteBuffer 并放入队列中，
  * 如果启动时没有启用 TransientStorePool 功能，则不会调用 TransientStorePool.init 方法，那么从队列中获取 ByteBuffer 会返回 null
+ *
+ * 短暂的存储池。RocketMQ 单独创建一个 MappedByteBuffer 内存缓存池，用来临时存储数据，数据先写入该内存映射中，然后由 commit 线程定时将数据从该内存复制到与目的物理文件对应的内存映射中。RokcetMQ 引入该机制主要的原因是
+ * 提供一种内存锁定，将当前堆外内存一直锁定在内存中，避免被进程将内存交换到磁盘
+ *
  */
 public class TransientStorePool {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.STORE_LOGGER_NAME);
 
-    // 池中预分配的 ByteBuffer 数量
+    // 池中预分配的 ByteBuffer 数量，availableBuffers 个数，可通过在 broker 配置文件中设置 transientStorePoolSize 默认为 5
     private final int poolSize;
-    // 每个 ByteBuffer 大小
+    // 每个 ByteBuffer 大小，默认为 mappedFileSizeCommitLog，表明 TransientStorePool 为 CommitLog 文件服务
     private final int fileSize;
-    // 采用双端队列维护预分配的 ByteBuffer
+    // ByteBuffer 容器，双端队列，采用双端队列维护预分配的 ByteBuffer
     private final Deque<ByteBuffer> availableBuffers;
     private final MessageStoreConfig storeConfig;
 
@@ -54,6 +58,7 @@ public class TransientStorePool {
     /**
      * It's a heavy init method.
      * 因为这里需要申请多个堆外 ByteBuffer ，所以是个十分重的初始化方法
+     * 创建 poolSize 个堆外内存并利用 com.sun.jna.Library 类库将该批内存锁定，避免被置换到交换区，提高存储性能
      */
     public void init() {
         // 申请 poolSize 个 ByteBuffer，容量为 fileSize
