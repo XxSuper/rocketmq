@@ -31,18 +31,22 @@ public class BrokerPathConfigHelper {
         brokerConfigPath = path;
     }
 
+    // topics.json topic 配置属性
     public static String getTopicConfigPath(final String rootDir) {
         return rootDir + File.separator + "config" + File.separator + "topics.json";
     }
 
+    // consumerOffset.json 集群消费模式消息消费进度
     public static String getConsumerOffsetPath(final String rootDir) {
         return rootDir + File.separator + "config" + File.separator + "consumerOffset.json";
     }
 
+    // subscriptionGroup.json 消息消费组配置信息
     public static String getSubscriptionGroupPath(final String rootDir) {
         return rootDir + File.separator + "config" + File.separator + "subscriptionGroup.json";
     }
 
+    // consumerFilter.json 主题消息过滤信息
     public static String getConsumerFilterPath(final String rootDir) {
         return rootDir + File.separator + "config" + File.separator + "consumerFilter.json";
     }

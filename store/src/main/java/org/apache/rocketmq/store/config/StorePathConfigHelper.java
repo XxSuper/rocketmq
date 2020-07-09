@@ -44,6 +44,7 @@ public class StorePathConfigHelper {
         return rootDir + File.separator + "lock";
     }
 
+    // delayOffset.json 延时消息队列拉取进度
     public static String getDelayOffsetStorePath(final String rootDir) {
         return rootDir + File.separator + "config" + File.separator + "delayOffset.json";
     }

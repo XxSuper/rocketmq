@@ -44,6 +44,9 @@ import org.apache.rocketmq.store.schedule.ScheduleMessageService;
 /**
  * Store all metadata downtime for recovery, data protection reliability
  * 消息存储文件，所有消息主题的消息都存储在 CommitLog 文件中
+ *
+ * 其特点是每一条消息长度不相同，每条消息的前面 4 个字节存储该条消息的总长度，存储目录默认为 ${ROCKET_HOME}/store/commitlog，可以通过在 broker 配置文件中设置 storePathRootDir 属性来改变默认路径。
+ * commitlog 文件默认大小为 1G，可通过在 broker 配置文件中设置 mappedFileSizeCommitLog 属性来改变默认大小。
  */
 public class CommitLog {
     // Message's MAGIC CODE daa320a7
@@ -885,12 +888,18 @@ public class CommitLog {
         return -1;
     }
 
+    /**
+     * 获取当前 Commitlog 目录最小偏移量
+     * @return
+     */
     public long getMinOffset() {
+        // 首先获取目录下的第一个文件，，如果该文件可用，则返回该文件的起始偏移量
         MappedFile mappedFile = this.mappedFileQueue.getFirstMappedFile();
         if (mappedFile != null) {
             if (mappedFile.isAvailable()) {
                 return mappedFile.getFileFromOffset();
             } else {
+                // 否则返回下一个文件的起始偏移量
                 return this.rollNextFile(mappedFile.getFileFromOffset());
             }
         }
@@ -898,18 +907,35 @@ public class CommitLog {
         return -1;
     }
 
+    /**
+     * 根据偏移量 offset 与消息长度 size 查找消息。
+     * @param offset
+     * @param size
+     * @return
+     */
     public SelectMappedBufferResult getMessage(final long offset, final int size) {
+        // 首先根据偏移找到所在的物理偏移量
         int mappedFileSize = this.defaultMessageStore.getMessageStoreConfig().getMappedFileSizeCommitLog();
+        // 获取消息所在的 mappedFile
         MappedFile mappedFile = this.mappedFileQueue.findMappedFileByOffset(offset, offset == 0);
         if (mappedFile != null) {
+            // 用 offset 与文件长度取余得到在文件内的偏移量，从该偏移量读取 size 长度的内容返回即可。
+            // 如果只根据消息偏移查找消息，则首先找到文件内的偏移量，然后尝试读取 4 个字节获取消息的实际长度，最后读取指定字节即可
             int pos = (int) (offset % mappedFileSize);
             return mappedFile.selectMappedBuffer(pos, size);
         }
         return null;
     }
 
+    /**
+     * 根据该 offset 返回下一个文件的起始偏移量。
+     * @param offset
+     * @return
+     */
     public long rollNextFile(final long offset) {
+        // 首先获取一个文件的大小
         int mappedFileSize = this.defaultMessageStore.getMessageStoreConfig().getMappedFileSizeCommitLog();
+        // 减去（offset % mappedFileSize）其目的是返回到下一文件的起始偏移量
         return offset + mappedFileSize - offset % mappedFileSize;
     }
 
