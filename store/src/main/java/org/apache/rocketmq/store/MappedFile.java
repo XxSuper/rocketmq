@@ -18,6 +18,16 @@ package org.apache.rocketmq.store;
 
 import com.sun.jna.NativeLong;
 import com.sun.jna.Pointer;
+import org.apache.rocketmq.common.UtilAll;
+import org.apache.rocketmq.common.constant.LoggerName;
+import org.apache.rocketmq.common.message.MessageExt;
+import org.apache.rocketmq.common.message.MessageExtBatch;
+import org.apache.rocketmq.logging.InternalLogger;
+import org.apache.rocketmq.logging.InternalLoggerFactory;
+import org.apache.rocketmq.store.config.FlushDiskType;
+import org.apache.rocketmq.store.util.LibC;
+import sun.nio.ch.DirectBuffer;
+
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -31,15 +41,6 @@ import java.security.AccessController;
 import java.security.PrivilegedAction;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
-import org.apache.rocketmq.common.UtilAll;
-import org.apache.rocketmq.common.constant.LoggerName;
-import org.apache.rocketmq.logging.InternalLogger;
-import org.apache.rocketmq.logging.InternalLoggerFactory;
-import org.apache.rocketmq.common.message.MessageExt;
-import org.apache.rocketmq.common.message.MessageExtBatch;
-import org.apache.rocketmq.store.config.FlushDiskType;
-import org.apache.rocketmq.store.util.LibC;
-import sun.nio.ch.DirectBuffer;
 
 /**
  * RocketMQ 通过使用内存映射文件来提高 IO 访问性能，无论是 CommitLog 、ConsumeQueue、IndexFile ，单个文件都被设计为固定长度，如果一个文件写满以后再创建一个新文件，文件名就为该文件第一条消息对应的全局物理偏移量
@@ -123,6 +124,7 @@ public class MappedFile extends ReferenceResource {
     }
 
     public static void clean(final ByteBuffer buffer) {
+        // 如果是堆外内存，调用堆外内存的 cleanup 方法清除
         if (buffer == null || !buffer.isDirect() || buffer.capacity() == 0)
             return;
         invoke(invoke(viewed(buffer), "cleaner"), "clean");
@@ -465,7 +467,16 @@ public class MappedFile extends ReferenceResource {
         return this.fileSize == this.wrotePosition.get();
     }
 
+    /**
+     * 操作 ByteBuffer 时如果使用了 slice() 方法，对其 ByteBuffer 进行读取时一般手动指定 position 与 limit 指针，而不是调用 flip 方法来切换读写状态
+     * @param pos
+     * @param size
+     * @return
+     */
     public SelectMappedBufferResult selectMappedBuffer(int pos, int size) {
+        // 查找 pos 到当前最大可读之间的数据，由于在整个写入期间都未曾改变 MappedByteBuffer 的指针，所以 mappedByteBuffer.slice() 方法返回的共享缓存区空间为整个 mappedFile
+        // 然后通过设置 byteBuffer 的 position 为待查找的值，读取字节为当前可读字节长度，最终返回的 ByteBuffer 的 limit （可读最大长度）为 size。整个共享缓存区的容量
+        // 为（ MappedFile#fileSize-pos ，故在操作 SelectMappedBufferResult 不能对包含在里面的 ByteBuffer 调用 flip 方法
         int readPosition = getReadPosition();
         if ((pos + size) <= readPosition) {
             if (this.hold()) {
@@ -504,30 +515,41 @@ public class MappedFile extends ReferenceResource {
 
     @Override
     public boolean cleanup(final long currentRef) {
+        // 判断是否可用，如果 available 为 true，表示 MappedFile 当前可用，无须清理，返回 false
         if (this.isAvailable()) {
             log.error("this file[REF:" + currentRef + "] " + this.fileName
                 + " have not shutdown, stop unmapping.");
             return false;
         }
 
+        // 判断是否清理完成，如果资源已经被清除，返回 true
         if (this.isCleanupOver()) {
             log.error("this file[REF:" + currentRef + "] " + this.fileName
                 + " have cleanup, do not do it again.");
             return true;
         }
 
+
         clean(this.mappedByteBuffer);
+        // 维护 MappedFile 类变量 TOTAL_MAPPED_VIRTUAL_MEMORY、TOTAL_MAPPED_FILES 并返回 true ，表示 cleanupOver 为 true
         TOTAL_MAPPED_VIRTUAL_MEMORY.addAndGet(this.fileSize * (-1));
         TOTAL_MAPPED_FILES.decrementAndGet();
         log.info("unmap file[REF:" + currentRef + "] " + this.fileName + " OK");
         return true;
     }
 
+    /**
+     * MappedFile 文件销毁，在整个 MappedFile 销毁过程中，首先需要释放资源，释放资源的前提条件是该 MappedFile 的引用小于等于 0
+     * @param intervalForcibly 表示拒绝被销毁的最大存活时间
+     * @return
+     */
     public boolean destroy(final long intervalForcibly) {
         this.shutdown(intervalForcibly);
 
+        // 是否清理完成
         if (this.isCleanupOver()) {
             try {
+                // 关闭文件通道，删除物理文件
                 this.fileChannel.close();
                 log.info("close file channel " + this.fileName + " OK");
 
