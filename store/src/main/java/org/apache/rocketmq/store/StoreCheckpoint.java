@@ -27,6 +27,14 @@ import org.apache.rocketmq.common.constant.LoggerName;
 import org.apache.rocketmq.logging.InternalLogger;
 import org.apache.rocketmq.logging.InternalLoggerFactory;
 
+/**
+ * checkpoint 的作用是记录 comitlog、ConsumeQueue、Index 文件的刷盘时间点，文件固定长度 4k，其中只用该文件前面的 24个字节
+ *
+ * -------------------------------------------------------------------------------
+ *      physicMsgTimestamp      |    logicsMsgTimestamp    |  indexMsgTimestamp  |
+ *     commitlog 文件刷盘时间点   |  消息消费队列文件刷盘时间点   |  索引文件刷盘时间点     |
+ * -------------------------------------------------------------------------------
+ */
 public class StoreCheckpoint {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.STORE_LOGGER_NAME);
     private final RandomAccessFile randomAccessFile;

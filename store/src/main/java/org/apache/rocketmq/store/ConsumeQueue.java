@@ -465,7 +465,8 @@ public class ConsumeQueue {
 
     private boolean putMessagePositionInfo(final long offset, final int size, final long tagsCode,
         final long cqOffset) {
-
+        // 依次将消息偏移量、消息长度、 tag hashcode 写入到 ByteBuffer 中，并根据 consumeQueueOffset 计算 ConumeQueue 中的物理地址，将内容追加到 ConsumeQueue 的内
+        // 存映射文件中（本操作只追击并不刷盘）， ConumeQueue 的刷盘方式固定为异步刷盘模式
         if (offset + size <= this.maxPhysicOffset) {
             log.warn("Maybe try to build consume queue repeatedly maxPhysicOffset={} phyOffset={}", maxPhysicOffset, offset);
             return true;
@@ -477,21 +478,26 @@ public class ConsumeQueue {
         this.byteBufferIndex.putInt(size);
         this.byteBufferIndex.putLong(tagsCode);
 
+        // 消息队列偏移量 + 消息队列存储单位大小
         final long expectLogicOffset = cqOffset * CQ_STORE_UNIT_SIZE;
 
+        // 获取 MappedFile 映射文件
         MappedFile mappedFile = this.mappedFileQueue.getLastMappedFile(expectLogicOffset);
         if (mappedFile != null) {
 
+            // 是否是 MappedFileQueue 队列中第一个文件并且偏移量为 0，并且写指针为 0
             if (mappedFile.isFirstCreateInQueue() && cqOffset != 0 && mappedFile.getWrotePosition() == 0) {
                 this.minLogicOffset = expectLogicOffset;
                 this.mappedFileQueue.setFlushedWhere(expectLogicOffset);
                 this.mappedFileQueue.setCommittedWhere(expectLogicOffset);
+                // 填充空白位置
                 this.fillPreBlank(mappedFile, expectLogicOffset);
                 log.info("fill pre blank space " + mappedFile.getFileName() + " " + expectLogicOffset + " "
                     + mappedFile.getWrotePosition());
             }
 
             if (cqOffset != 0) {
+                // 当前的物理偏移量
                 long currentLogicOffset = mappedFile.getWrotePosition() + mappedFile.getFileFromOffset();
 
                 if (expectLogicOffset < currentLogicOffset) {
@@ -511,7 +517,9 @@ public class ConsumeQueue {
                     );
                 }
             }
+            // commitlog 的物理偏移量 + 大小
             this.maxPhysicOffset = offset + size;
+            // 写入消息消费队列
             return mappedFile.appendMessage(this.byteBufferIndex.array());
         }
         return false;

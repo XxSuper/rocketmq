@@ -850,6 +850,7 @@ public class BrokerController {
     }
 
     public void start() throws Exception {
+        // Broker 服务器在启动时会启动 ReputMessageService 线程，通过 this.messageStore.start()
         if (this.messageStore != null) {
             this.messageStore.start();
         }

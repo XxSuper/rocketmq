@@ -276,6 +276,9 @@ public class DefaultMessageStore implements MessageStore {
             }
             log.info("[SetReputOffset] maxPhysicalPosInLogicQueue={} clMinOffset={} clMaxOffset={} clConfirmedOffset={}",
                 maxPhysicalPosInLogicQueue, this.commitLog.getMinOffset(), this.commitLog.getMaxOffset(), this.commitLog.getConfirmOffset());
+
+            // Broker 服务器在启动时会启动 ReputMessageService 线程，并初始化一个非常关键的参数 reputFromOffset ，该参数的含义是 ReputMessageService 是从哪个物理偏移量
+            // 开始转发消息给 ConsumeQueue巳和 IndexFile。如果允许重复转发， reputFromOffset 设置为 commitLog 的提交指针；如果不允许重复转发， reputFromOffset Commitlog 的内 最大偏移
             this.reputMessageService.setReputFromOffset(maxPhysicalPosInLogicQueue);
             this.reputMessageService.start();
 
@@ -1163,9 +1166,12 @@ public class DefaultMessageStore implements MessageStore {
     }
 
     public ConsumeQueue findConsumeQueue(String topic, int queueId) {
+        // 获取该主题下的消息消费队列目录
         ConcurrentMap<Integer, ConsumeQueue> map = consumeQueueTable.get(topic);
         if (null == map) {
+            // 没有获取到对应的消息消费队列集合则创建一个新的集合放入
             ConcurrentMap<Integer, ConsumeQueue> newMap = new ConcurrentHashMap<Integer, ConsumeQueue>(128);
+            // 如果存在则返回老的 map
             ConcurrentMap<Integer, ConsumeQueue> oldMap = consumeQueueTable.putIfAbsent(topic, newMap);
             if (oldMap != null) {
                 map = oldMap;
@@ -1174,14 +1180,17 @@ public class DefaultMessageStore implements MessageStore {
             }
         }
 
+        // 根据队列 id 获取消息队列
         ConsumeQueue logic = map.get(queueId);
         if (null == logic) {
+            // 如果根据队列 id 获取消息队列没有获取到则创建一个 ConsumeQueue 放入
             ConsumeQueue newLogic = new ConsumeQueue(
                 topic,
                 queueId,
                 StorePathConfigHelper.getStorePathConsumeQueue(this.messageStoreConfig.getStorePathRootDir()),
                 this.getMessageStoreConfig().getMappedFileSizeConsumeQueue(),
                 this);
+            // 如果存在则返回老的 map
             ConsumeQueue oldLogic = map.putIfAbsent(queueId, newLogic);
             if (oldLogic != null) {
                 logic = oldLogic;
@@ -1459,7 +1468,10 @@ public class DefaultMessageStore implements MessageStore {
     }
 
     public void putMessagePositionInfo(DispatchRequest dispatchRequest) {
+        // 根据消息主题与队列 ID ，先获取对应的 ConumeQueue 文件，因为每一个消息主题对应一个消息消费队列目录，然后主题下每一个消息队列对应一个文件
+        // 夹，然后取该文件夹最后的 ConsumeQueue 文件即可
         ConsumeQueue cq = this.findConsumeQueue(dispatchRequest.getTopic(), dispatchRequest.getQueueId());
+        // 写入消息
         cq.putMessagePositionInfoWrapper(dispatchRequest);
     }
 
@@ -1512,6 +1524,9 @@ public class DefaultMessageStore implements MessageStore {
         }, 6, TimeUnit.SECONDS);
     }
 
+    /**
+     * 消息消费队列转发任务实现类，内部最终将调用 putMessagePositioninfo() 方法
+     */
     class CommitLogDispatcherBuildConsumeQueue implements CommitLogDispatcher {
 
         @Override
@@ -1529,10 +1544,12 @@ public class DefaultMessageStore implements MessageStore {
         }
     }
 
+    // Hash 索引文件转发任务实现类
     class CommitLogDispatcherBuildIndex implements CommitLogDispatcher {
 
         @Override
         public void dispatch(DispatchRequest request) {
+            // 如果 messageIndexEnable 为 true ，则调用 IndexService#buildlndex 构建 Hash 索引，否则忽略本次转发任务
             if (DefaultMessageStore.this.messageStoreConfig.isMessageIndexEnable()) {
                 DefaultMessageStore.this.indexService.buildIndex(request);
             }
@@ -1852,18 +1869,22 @@ public class DefaultMessageStore implements MessageStore {
                 this.reputFromOffset = DefaultMessageStore.this.commitLog.getMinOffset();
             }
             for (boolean doNext = true; this.isCommitLogAvailable() && doNext; ) {
-
+                // 允许重复推送并且 reputFromOffset 大于等于 commitLog 的 confirmOffset 偏移量，则停止循环
                 if (DefaultMessageStore.this.getMessageStoreConfig().isDuplicationEnable()
                     && this.reputFromOffset >= DefaultMessageStore.this.getConfirmOffset()) {
                     break;
                 }
 
+                // 返回 reputFromOffset 偏移量开始的全部有效数据（commitlog 文件），然后循环读取每一条消息
                 SelectMappedBufferResult result = DefaultMessageStore.this.commitLog.getData(reputFromOffset);
                 if (result != null) {
                     try {
                         this.reputFromOffset = result.getStartOffset();
 
                         for (int readSize = 0; readSize < result.getSize() && doNext; ) {
+                            // 从 result 返回的 ByteBuffer 中循环读取消息，一次读取一条，创建 DispatchRequest 对象。如果消息长度大于 0，则调用 doDispatch 方法。
+                            // result 返回的 ByteBuffer 中循环读取消息，一次读取一条，创建 DispatchRequest DispatchR quest 类图 4-17 示， 如果消息长度大于 ，则调用 doDispatch
+                            // 最终将分别调用 CommitLogDispatcherBuildConsumeQueue （构建消息消费队列）、CommitLogDispatcherBuildlndex （构建索引文件）
                             DispatchRequest dispatchRequest =
                                 DefaultMessageStore.this.commitLog.checkMessageAndReturnSize(result.getByteBuffer(), false, false);
                             int size = dispatchRequest.getBufferSize() == -1 ? dispatchRequest.getMsgSize() : dispatchRequest.getBufferSize();
@@ -1922,6 +1943,7 @@ public class DefaultMessageStore implements MessageStore {
 
         @Override
         public void run() {
+            // ReputMessageService 线程每执行一次任务推送休息 1 毫秒就继续尝试推送消息到消息队列和索引文件，消息消费转发的核心实现在 doReput 方法中实现
             DefaultMessageStore.log.info(this.getServiceName() + " service started");
 
             while (!this.isStopped()) {
