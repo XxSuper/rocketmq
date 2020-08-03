@@ -197,25 +197,29 @@ public class DefaultMessageStore implements MessageStore {
         boolean result = true;
 
         try {
+            // 判断上一次推出是否正常。其实现机制 Broker 在启动时创建 $｛ROCKET_HOME}/store/abort 文件，在退出时通过注册 JVM 钩子函数删除 abort 文件。如果下一次启动时存在 abort 文件
+            // 说明 Broker 是异常退出的， Commitlog Consumequeue 数据有可能不一致，需要进行修复
             boolean lastExitOK = !this.isTempFileExist();
             log.info("last shutdown {}", lastExitOK ? "normally" : "abnormally");
 
+            // 加载延迟队列，RocketMQ 定时消息相关
             if (null != scheduleMessageService) {
                 result = result && this.scheduleMessageService.load();
             }
 
-            // load Commit Log
+            // load Commit Log 加载 CommitLog 文件
             result = result && this.commitLog.load();
 
-            // load Consume Queue
+            // load Consume Queue 加载消息消费队列
             result = result && this.loadConsumeQueue();
 
             if (result) {
+                // 加载存储检测点，检测点 主要 commitlog 文件、Consumequeue 文件、Index 索引文件的刷盘点
                 this.storeCheckpoint =
                     new StoreCheckpoint(StorePathConfigHelper.getStoreCheckpoint(this.messageStoreConfig.getStorePathRootDir()));
-
+                // 加载 index 索引文件
                 this.indexService.load(lastExitOK);
-
+                // 根据 Broker 是否是正常停止执行不同的恢复策略
                 this.recover(lastExitOK);
 
                 log.info("load over, and the max phy offset = {}", this.getMaxPhyOffset());
@@ -369,6 +373,7 @@ public class DefaultMessageStore implements MessageStore {
     public void destroyLogics() {
         for (ConcurrentMap<Integer, ConsumeQueue> maps : this.consumeQueueTable.values()) {
             for (ConsumeQueue logic : maps.values()) {
+                // 重置 ConsumeQueue 的 maxPhysicOffset 与 minLogicOffset，然后调用 mappedFileQueue 的 destroy 方法将消息消费队列目录下的文件全部删除
                 logic.destroy();
             }
         }
@@ -1333,29 +1338,40 @@ public class DefaultMessageStore implements MessageStore {
         return file.exists();
     }
 
+    /**
+     * 加载消息消费队列，调用 DefaultMessageStore#loadConsumeQueue ，其思路与 CommitLog 大体一致，遍历消息消费队列根目录，获取该 Broker 存储的所有主题，然后遍每个主题目录，
+     * 获取该主题下的所消息消费队列， 然后分别加载每个消息消费队列下的文件，构建 ConsumeQueue 对象，主要初始化 ConsumeQueue 的 topic、queueld、storePath、mappedFileSize 属性
+     * @return
+     */
     private boolean loadConsumeQueue() {
+        // 获取消息消费队列根目录
         File dirLogic = new File(StorePathConfigHelper.getStorePathConsumeQueue(this.messageStoreConfig.getStorePathRootDir()));
+
         File[] fileTopicList = dirLogic.listFiles();
         if (fileTopicList != null) {
-
+            // 遍历所有主题目录
             for (File fileTopic : fileTopicList) {
                 String topic = fileTopic.getName();
 
                 File[] fileQueueIdList = fileTopic.listFiles();
                 if (fileQueueIdList != null) {
+                    // 遍历主题目录下的所有消息消费队列
                     for (File fileQueueId : fileQueueIdList) {
                         int queueId;
                         try {
+                            // 获取 queueId
                             queueId = Integer.parseInt(fileQueueId.getName());
                         } catch (NumberFormatException e) {
                             continue;
                         }
+                        // 创建 ConsumeQueue
                         ConsumeQueue logic = new ConsumeQueue(
                             topic,
                             queueId,
                             StorePathConfigHelper.getStorePathConsumeQueue(this.messageStoreConfig.getStorePathRootDir()),
                             this.getMessageStoreConfig().getMappedFileSizeConsumeQueue(),
                             this);
+                        // 访问缓存
                         this.putConsumeQueue(topic, queueId, logic);
                         if (!logic.load()) {
                             return false;
@@ -1370,15 +1386,25 @@ public class DefaultMessageStore implements MessageStore {
         return true;
     }
 
+    /**
+     * 存储启动时所谓的文件恢复主要完成 flushedPosition, committedWhere 指针的设置 、消息消费队列最大偏移量加载到内存，并删除 flushedPosition 之后所有的文件。如果 Broker
+     * 异常启动， 在文件恢复过程中 RocketMQ 会将最后一个有效文件中的所有消息重新转发到消息消费队列与索引文件，确保不丢失消息，但同时会带来消息重复的问题，纵观 RocktMQ 的整体设计思想，
+     * RocketMQ 保证消息不丢失但不保证消息不会重复消费，故消息消费业务方需要实现消息消费的幕等设计
+     * @param lastExitOK
+     */
     private void recover(final boolean lastExitOK) {
         long maxPhyOffsetOfConsumeQueue = this.recoverConsumeQueue();
 
         if (lastExitOK) {
+            // 正常停止的文件恢复机制
+            // 正常停止默认从倒数第三个文件开始进行恢复
             this.commitLog.recoverNormally(maxPhyOffsetOfConsumeQueue);
         } else {
+            // 异常停止的文件恢复机制
+            // 异常停止则需要从最后一个文件往前走，找到第一个消息存储正常的文件。其次，如果 commitlog 目录没有消息文件，如果在消息消费队列目录下存在文件，则需要销毁
             this.commitLog.recoverAbnormally(maxPhyOffsetOfConsumeQueue);
         }
-
+        // 恢复 ConsumeQueue 文件后，将在 CommitLog 实例中保存每个消息消费队列当前的存储逻辑偏移量，这也是消息中不仅存储主题、消息队列 ID 还存储了消息队列偏移量的关键所在
         this.recoverTopicQueueTable();
     }
 
@@ -1418,14 +1444,16 @@ public class DefaultMessageStore implements MessageStore {
     public void recoverTopicQueueTable() {
         HashMap<String/* topic-queueid */, Long/* offset */> table = new HashMap<String, Long>(1024);
         long minPhyOffset = this.commitLog.getMinOffset();
+        // 遍历每个消息消费队列
         for (ConcurrentMap<Integer, ConsumeQueue> maps : this.consumeQueueTable.values()) {
             for (ConsumeQueue logic : maps.values()) {
                 String key = logic.getTopic() + "-" + logic.getQueueId();
                 table.put(key, logic.getMaxOffsetInQueue());
+                // 设置 ConsumeQueue 消息消费队列最小逻辑偏移量
                 logic.correctMinOffset(minPhyOffset);
             }
         }
-
+        // 设置主题消息队列列表
         this.commitLog.setTopicQueueTable(table);
     }
 

@@ -168,28 +168,38 @@ public class CommitLog {
      * When the normal exit, data recovery, all memory data have been flush
      */
     public void recoverNormally(long maxPhyOffsetOfConsumeQueue) {
+        // Broker 正常停止再重启时，从倒数第三个文件开始进行恢复，如果不足三个文件，则从第一个文件开始恢复。 checkCRCOnRecover 参数设置在进行文件恢复时查找消息时是否验证 CRC
         boolean checkCRCOnRecover = this.defaultMessageStore.getMessageStoreConfig().isCheckCRCOnRecover();
+        // 获取所有文件
         final List<MappedFile> mappedFiles = this.mappedFileQueue.getMappedFiles();
         if (!mappedFiles.isEmpty()) {
             // Began to recover from the last third file
+            // 从倒数第三个文件开始进行恢复，如果不足三个文件，则从第一个文件开始恢复
             int index = mappedFiles.size() - 3;
             if (index < 0)
                 index = 0;
 
             MappedFile mappedFile = mappedFiles.get(index);
             ByteBuffer byteBuffer = mappedFile.sliceByteBuffer();
+            // processOffset 为 Commitlog 文件已确认的物理偏移量，等于 mappedFile.getFileFromOffset 加上 mappedFileOffset
             long processOffset = mappedFile.getFileFromOffset();
+            // mappedFileOffset 为当前文件已校验通过的 offset
             long mappedFileOffset = 0;
             while (true) {
+                // 遍历 Commitlog 文件，每次取出一条消息，如果查找结果为 true 并且消息的长度大于 0 表示消息正确，mappedFileOffset 指针向前移动本条消息的长度；如果查找结
+                // 果为 true 并且消息的长度等于 0 表示已到该文件的末尾，如果还有下一个文件，则重置 processOffset、mappedFileOffset 重复步骤，否则跳出循环；如果查找结构为 false，表明
+                // 该文件未填满所有消息，跳出循环，结束遍历文件
                 DispatchRequest dispatchRequest = this.checkMessageAndReturnSize(byteBuffer, checkCRCOnRecover);
                 int size = dispatchRequest.getMsgSize();
                 // Normal data
+                // 如果查找结果为 true 并且消息的长度大于 0 表示消息正确，mappedFileOffset 指针向前移动本条消息的长度
                 if (dispatchRequest.isSuccess() && size > 0) {
                     mappedFileOffset += size;
                 }
                 // Come the end of the file, switch to the next file Since the
                 // return 0 representatives met last hole,
                 // this can not be included in truncate offset
+                // 如果查找结果为 true 并且消息的长度等于 0 表示已到该文件的末尾，如果还有下一个文件，则重置 processOffset、mappedFileOffset
                 else if (dispatchRequest.isSuccess() && size == 0) {
                     index++;
                     if (index >= mappedFiles.size()) {
@@ -205,17 +215,23 @@ public class CommitLog {
                     }
                 }
                 // Intermediate file read error
+                // 如果查找结构为 false，表明该文件未填满所有消息，跳出循环，结束遍历文件
                 else if (!dispatchRequest.isSuccess()) {
                     log.info("recover physics file end, " + mappedFile.getFileName());
                     break;
                 }
             }
 
+            // processOffset 为 Commitlog 文件已确认的物理偏移量，等于 mappedFile.getFileFromOffset 加上 mappedFileOffset
             processOffset += mappedFileOffset;
+
+            // 更新 MappedFileQueue 的 flushedWhere 与 commiteedWhere 指针
             this.mappedFileQueue.setFlushedWhere(processOffset);
             this.mappedFileQueue.setCommittedWhere(processOffset);
+            // 删除 offset 之后的所有文件。
             this.mappedFileQueue.truncateDirtyFiles(processOffset);
 
+            // 清除 ConsumeQueue 多余的数据
             // Clear ConsumeQueue redundant data
             if (maxPhyOffsetOfConsumeQueue >= processOffset) {
                 log.warn("maxPhyOffsetOfConsumeQueue({}) >= processOffset({}), truncate dirty logic files", maxPhyOffsetOfConsumeQueue, processOffset);
@@ -429,6 +445,7 @@ public class CommitLog {
 
     @Deprecated
     public void recoverAbnormally(long maxPhyOffsetOfConsumeQueue) {
+        // 异常停止则需要从最后一个文件往前走，找到第一个消息存储正常的文件。
         // recover by the minimum time stamp
         boolean checkCRCOnRecover = this.defaultMessageStore.getMessageStoreConfig().isCheckCRCOnRecover();
         final List<MappedFile> mappedFiles = this.mappedFileQueue.getMappedFiles();
@@ -443,7 +460,7 @@ public class CommitLog {
                     break;
                 }
             }
-
+            // 如果找到 MappedFile ，则遍历 MappedFile 中的消息，验证消息的合法性，并将消息重新转发到消息消费队列与索引文件
             if (index < 0) {
                 index = 0;
                 mappedFile = mappedFiles.get(index);
@@ -506,6 +523,7 @@ public class CommitLog {
         }
         // Commitlog case files are deleted
         else {
+            // 如果未找到有效 MappedFile，则设置 commitlog 目录的 flushedWhere 、committedWhere 指针都为 0，并销毁消息消费队列文件
             log.warn("The commitlog files are deleted, and delete the consume queue files");
             this.mappedFileQueue.setFlushedWhere(0);
             this.mappedFileQueue.setCommittedWhere(0);
@@ -516,6 +534,7 @@ public class CommitLog {
     private boolean isMappedFileMatchedRecover(final MappedFile mappedFile) {
         ByteBuffer byteBuffer = mappedFile.sliceByteBuffer();
 
+        // 首先判断文件的魔数，如果不是 MESSAGE_MAGIC_CODE_POSTION ，返回 false，表示该文件不符合 commitlog 消息文件的存储格式
         int magicCode = byteBuffer.getInt(MessageDecoder.MESSAGE_MAGIC_CODE_POSTION);
         if (magicCode != MESSAGE_MAGIC_CODE) {
             return false;
@@ -524,11 +543,14 @@ public class CommitLog {
         int sysFlag = byteBuffer.getInt(MessageDecoder.SYSFLAG_POSITION);
         int bornhostLength = (sysFlag & MessageSysFlag.BORNHOST_V6_FLAG) == 0 ? 8 : 20;
         int msgStoreTimePos = 4 + 4 + 4 + 4 + 4 + 8 + 8 + 4 + 8 + bornhostLength;
+        // 如果文件中第一条消息的存储时间等于 0，返回 false ，说明该消息存储文件中未存储任何消息
         long storeTimestamp = byteBuffer.getLong(msgStoreTimePos);
         if (0 == storeTimestamp) {
             return false;
         }
 
+        // 对比文件第一条消息的时间戳与检测点，文件第一条消息的时间戳小于文件检测点说明该文件部分消息是可靠的则从该文件开始恢复。文件检测点中保存了 Commitlog 、消息消费队列（ ConsumeQueue )、索引文件( IndexFile ）的文件刷盘点，
+        // RocketMQ 默认选择消息文件与消息消费队列这两个文件的时间刷盘点中最小值与消息文件第一条消息的时间戳对比，如果 messageIndexEnable 为 true 表示索引文件的刷盘时间点也参与计算
         if (this.defaultMessageStore.getMessageStoreConfig().isMessageIndexEnable()
             && this.defaultMessageStore.getMessageStoreConfig().isMessageIndexSafe()) {
             if (storeTimestamp <= this.defaultMessageStore.getStoreCheckpoint().getMinTimestampIndex()) {

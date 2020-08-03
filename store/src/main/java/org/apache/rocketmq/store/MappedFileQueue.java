@@ -111,18 +111,31 @@ public class MappedFileQueue {
         return mfs;
     }
 
+    /**
+     * 删除 offset 后的所有文件。遍历目录下的文件，如果文件的尾部偏移量小于 offset 则跳过该文件，如果尾部的偏移量大于 offset ，则进一步比较 offset 与文件的开始偏移量，
+     * 如果 offset 大于文件的起始偏移量，说明当前文件包含了有效偏移量 ，设置 MappedFile 的 flushedPosition 和 commitedPosition ；如果 offset 小于文件的起始偏移量，说
+     * 明该文件是有效文件后面创建的，调用 MappedFile#destory 释放 MappedFile 占用的内存资源（内存映射与内存通道等），然后加入到待删除文件列表中，最终调用 deleteExpiredFile
+     * 将文件从物理磁盘删除。过期文件的删除
+     * @param offset
+     */
     public void truncateDirtyFiles(long offset) {
         List<MappedFile> willRemoveFiles = new ArrayList<MappedFile>();
-
+        // 遍历所有的文件
         for (MappedFile file : this.mappedFiles) {
+            // 文件的尾部偏移量
             long fileTailOffset = file.getFileFromOffset() + this.mappedFileSize;
+            // 如果尾部的偏移量大于 offset
             if (fileTailOffset > offset) {
+                // 比较 offset 与文件的开始偏移量，如果 offset 大于文件的起始偏移量，说明当前文件包含了有效偏移量
                 if (offset >= file.getFileFromOffset()) {
+                    // 设置 MappedFile 的 flushedPosition 和 commitedPosition
                     file.setWrotePosition((int) (offset % this.mappedFileSize));
                     file.setCommittedPosition((int) (offset % this.mappedFileSize));
                     file.setFlushedPosition((int) (offset % this.mappedFileSize));
                 } else {
+                    // 如果 offset 小于文件的起始偏移量说明该文件是有效文件后面创建的
                     file.destroy(1000);
+                    // 加入待删除列表
                     willRemoveFiles.add(file);
                 }
             }
@@ -155,9 +168,12 @@ public class MappedFileQueue {
     }
 
     public boolean load() {
+        // 遍历存储目录下的所有文件
         File dir = new File(this.storePath);
         File[] files = dir.listFiles();
         if (files != null) {
+            // 加载 Commitlog 文件，加载 ${ROCKET_HOME}/store/commitlog 下所有文件并按照文件名排序，如果文件大小与配置文件的单个文件大小不一致，将忽略该目录
+            // 下所有文件， 然后创建 MappedFile。 注意 load 方法将 wrotePosition、flushedPosition、committedPosition 三个指针都设置为文件大小
             // ascending order
             Arrays.sort(files);
             for (File file : files) {

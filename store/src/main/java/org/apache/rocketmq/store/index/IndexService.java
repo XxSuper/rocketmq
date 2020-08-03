@@ -54,17 +54,25 @@ public class IndexService {
             StorePathConfigHelper.getStorePathIndex(store.getMessageStoreConfig().getStorePathRootDir());
     }
 
+    /**
+     * 加载索引文件，如果上次异常退出，而且索引文件上次刷盘时间小于该索引文件最大的消息时间戳该文件将立即销毁
+     * @param lastExitOK
+     * @return
+     */
     public boolean load(final boolean lastExitOK) {
+        // 索引文件根目录
         File dir = new File(this.storePath);
         File[] files = dir.listFiles();
         if (files != null) {
             // ascending order
             Arrays.sort(files);
+            // 遍历所有的索引文件
             for (File file : files) {
                 try {
+                    // 加载索引文件
                     IndexFile f = new IndexFile(file.getPath(), this.hashSlotNum, this.indexNum, 0, 0);
                     f.load();
-
+                    // 如果上次异常退出而且索引文件上次刷盘时间小于该索引文件最大的消息时间戳
                     if (!lastExitOK) {
                         if (f.getEndTimestamp() > this.defaultMessageStore.getStoreCheckpoint()
                             .getIndexMsgTimestamp()) {

@@ -378,18 +378,22 @@ public class ConsumeQueue {
     }
 
     public void correctMinOffset(long phyMinOffset) {
+        // 获取 MapedFileQueue 队列中第一个 MapedFile 对象
         MappedFile mappedFile = this.mappedFileQueue.getFirstMappedFile();
         long minExtAddr = 1;
         if (mappedFile != null) {
+            // 调用 selectMapedBuffer(0) 方法从第 0 位开始读取所有数据
             SelectMappedBufferResult result = mappedFile.selectMappedBuffer(0);
             if (result != null) {
                 try {
+                    // 逐个解析获取到的数据的数据单元
                     for (int i = 0; i < result.getSize(); i += ConsumeQueue.CQ_STORE_UNIT_SIZE) {
                         long offsetPy = result.getByteBuffer().getLong();
                         result.getByteBuffer().getInt();
                         long tagsCode = result.getByteBuffer().getLong();
-
+                        // 检查每个消息单元中保存的物理偏移量（前8字节）是否大于等于最小物理偏移量
                         if (offsetPy >= phyMinOffset) {
+                            // 若是则将此消息单元的位置加上该文件的起始偏移量作为 ConsumeQueue 数据的最小逻辑偏移量存于变量 minLogicOffse 中
                             this.minLogicOffset = mappedFile.getFileFromOffset() + i;
                             log.info("Compute logical min offset: {}, topic: {}, queueId: {}",
                                 this.getMinOffsetInQueue(), this.topic, this.queueId);
