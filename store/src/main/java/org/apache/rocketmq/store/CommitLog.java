@@ -731,13 +731,29 @@ public class CommitLog {
         return putMessageResult;
     }
 
+    /**
+     * RocketMQ 存储与读写是基于 JDK NIO 的内存映射机制（ MappedByteBuffer ）的，消息存储时首先将消息追加到内存，再根据配置的刷盘策略在不同时间进行刷写磁盘。如果
+     * 是同步刷盘，消息追加到内存后，将同步调用 MappedByteBuffer 的 force() 方法；如果是异步刷盘，在消息追加到内存后立刻返回给消息发送端。 RocketMQ 使用一个单独的线程按
+     * 照某一个设定的频率执行刷盘操作。通过在 broker 配置文件中配置 flushDiskType 来设定刷盘方式，可选值为 ASYNC_FLUSH（异步刷盘）、SYNC_FLUSH 同步刷盘），默认为异步刷盘
+     *
+     * Broker 同步刷盘，指的是在消息追加到内存映射文件的内存中后，立即将数据从内存刷写到磁盘文件
+     *
+     * @param result
+     * @param putMessageResult
+     * @param messageExt
+     */
     public void handleDiskFlush(AppendMessageResult result, PutMessageResult putMessageResult, MessageExt messageExt) {
         // Synchronization flush
+        // 如果是同步刷盘
         if (FlushDiskType.SYNC_FLUSH == this.defaultMessageStore.getMessageStoreConfig().getFlushDiskType()) {
+            // 构建 GroupCommitRequest 同步任务并提交到 GroupCommitService
             final GroupCommitService service = (GroupCommitService) this.flushCommitLogService;
             if (messageExt.isWaitStoreMsgOK()) {
+                // 等待同步刷盘任务完成，如果超时则返回刷盘错误，刷盘成功后正常返回给调用方。nextOffset 为刷盘偏移量 + 消息长度
                 GroupCommitRequest request = new GroupCommitRequest(result.getWroteOffset() + result.getWroteBytes());
+                // 消息生产者在消息服务端将消息内容追加到内存映射文件中（内存）后，需要同步将内存的内容立刻刷写到磁盘，通过调用内存映射文件( MappedByteBuffer#force 方法）可将内存中的数据写入磁盘
                 service.putRequest(request);
+                // 消费发送线程将消息追加到内存映射文件后，将同步任务 GroupCommitRequest 提交到 GroupCommitService 线程，然后调用阻塞等待刷盘结果，超时时间默认 5s
                 boolean flushOK = request.waitForFlush(this.defaultMessageStore.getMessageStoreConfig().getSyncFlushTimeout());
                 if (!flushOK) {
                     log.error("do groupcommit, wait for flush failed, topic: " + messageExt.getTopic() + " tags: " + messageExt.getTags()
@@ -749,7 +765,17 @@ public class CommitLog {
             }
         }
         // Asynchronous flush
+        // Broker 异步刷盘
         else {
+            // 异步刷盘根据是否开启 transientStorePoolEnable 机制 ，刷盘实现会有细微差别。如果 transientStorePoolEnable 为 true。RocketMQ 会单独申请一个与目标物理文件(commitlog)
+            // 同样大小的堆外内存，该堆外内存将使用内存锁定，确保不会被置换到虚拟内存中去，消息首先追加到堆外内存，然后提交到与物理文件的内存映射内存中，再 flush 到磁盘。如果
+            // transientStorePoolEnable 为 false ，消息直接追加到与物理文件直接映射的内存中，然后刷写到磁盘。
+            // 1 ）首先将消息直接追加到 ByteBuffer （堆外内存 DirectByteBuffer ), wrotePosition 随着消息的不断追加向后移动
+            // 2 ）CommitRealTimeService 线程默认每 200ms 将 ByteBuffer 新追加的内容（wrotePosihon 减去 commitedPosition ）的数据提交到 MappedByteBuffer中
+            // 3 ) MappedByteBuffer 在内存中追加提交的内容， wrotePosition 指针向前后移动，然后返回
+            // 4 ) commit 操作成功返回，将 commitedPosition 向前后移动本次提交的内容长度，此时 wrotePosition 针依然可以向前推进
+            // 5 ) FlushRealTimeService 线程默认每 500ms 将 MappedByteBuffer 中新追加的内存( wrotePosition 减去上一次刷写位置 flushedPosition ）通过调用 MappedByteBuffer#force()
+            // 方法将数据刷写到磁盘
             if (!this.defaultMessageStore.getMessageStoreConfig().isTransientStorePoolEnable()) {
                 flushCommitLogService.wakeup();
             } else {
@@ -1027,6 +1053,7 @@ public class CommitLog {
         protected static final int RETRY_TIMES_OVER = 10;
     }
 
+    // CommitRealTimeService 提交钱程工作机制
     class CommitRealTimeService extends FlushCommitLogService {
 
         private long lastCommitTimestamp = 0;
@@ -1040,13 +1067,15 @@ public class CommitLog {
         public void run() {
             CommitLog.log.info(this.getServiceName() + " service started");
             while (!this.isStopped()) {
+                // CommitRealTimeService 线程间隔时间，默认 200ms
                 int interval = CommitLog.this.defaultMessageStore.getMessageStoreConfig().getCommitIntervalCommitLog();
-
+                // 一次提交任务至少包含页数，如果待提交数据不足，小于该参数配置的值，将忽略本次提交任务，默认 4 页
                 int commitDataLeastPages = CommitLog.this.defaultMessageStore.getMessageStoreConfig().getCommitCommitLogLeastPages();
-
+                // 两次真实提交最大间隔，默认 200ms
                 int commitDataThoroughInterval =
                     CommitLog.this.defaultMessageStore.getMessageStoreConfig().getCommitCommitLogThoroughInterval();
 
+                // 如果距上次提交间隔超过 commitDataThoroughlnterval 则本次提交忽略 commitDataLeastPages 参数， 就是如果待提交数据小于指定页数，也执行提交操作
                 long begin = System.currentTimeMillis();
                 if (begin >= (this.lastCommitTimestamp + commitDataThoroughInterval)) {
                     this.lastCommitTimestamp = begin;
@@ -1054,6 +1083,8 @@ public class CommitLog {
                 }
 
                 try {
+                    // 执行提交操作，将待提交数据提交到物理文件的内存映射内存区，如果返回 false ，并不是代表提交失败，而是只提交了一部分数据，唤醒刷盘线程执行刷盘操作.
+                    // 该线程每完成一次提交动作，将等待 200ms 再继续执行下一次提交任务
                     boolean result = CommitLog.this.mappedFileQueue.commit(commitDataLeastPages);
                     long end = System.currentTimeMillis();
                     if (!result) {
@@ -1080,6 +1111,7 @@ public class CommitLog {
         }
     }
 
+    // FlushRealTimeService 刷盘线程工作机制
     class FlushRealTimeService extends FlushCommitLogService {
         private long lastFlushTimestamp = 0;
         private long printTimes = 0;
@@ -1088,16 +1120,19 @@ public class CommitLog {
             CommitLog.log.info(this.getServiceName() + " service started");
 
             while (!this.isStopped()) {
+                // 默认为 false，表示 await 方法等待；如果为 true ，表示使用 Thread.sleep 方法等待
                 boolean flushCommitLogTimed = CommitLog.this.defaultMessageStore.getMessageStoreConfig().isFlushCommitLogTimed();
-
+                // FlushRealTimeService 线程任务运行间隔
                 int interval = CommitLog.this.defaultMessageStore.getMessageStoreConfig().getFlushIntervalCommitLog();
+                // 一次刷写任务至少包含页数，如果待刷写数据不足，小于该参数配置的值，将忽略本次刷写任务，默认 4 页
                 int flushPhysicQueueLeastPages = CommitLog.this.defaultMessageStore.getMessageStoreConfig().getFlushCommitLogLeastPages();
-
+                // 两次真实刷写任务最大间隔，默认 10s
                 int flushPhysicQueueThoroughInterval =
                     CommitLog.this.defaultMessageStore.getMessageStoreConfig().getFlushCommitLogThoroughInterval();
 
                 boolean printFlushProgress = false;
 
+                // 如果距上次间隔超过 flushPhysicQueueThoroughinterval ，则本次刷盘任务将忽略 flushPhysicQueueLeastPages，也就是如果待刷写数据小于指定页数也执行刷写磁盘操作
                 // Print flush progress
                 long currentTimeMillis = System.currentTimeMillis();
                 if (currentTimeMillis >= (this.lastFlushTimestamp + flushPhysicQueueThoroughInterval)) {
@@ -1107,6 +1142,7 @@ public class CommitLog {
                 }
 
                 try {
+                    // 执行一次刷盘任务前先等待指定时间间隔，然后再执行刷盘任务
                     if (flushCommitLogTimed) {
                         Thread.sleep(interval);
                     } else {
@@ -1117,6 +1153,8 @@ public class CommitLog {
                         this.printFlushProgress();
                     }
 
+                    // 调用 flush 方法将内存中数据刷写到磁盘，并且更新存储检测点文件的 comm1tlog 文件的更新时间戳，文件检测点文件（ checkpoint 文件）的刷盘动作在刷盘消息消费队列线程中执行，
+                    // 其入口为 DefaultMessageStore#FlushConsumeQueueService。
                     long begin = System.currentTimeMillis();
                     CommitLog.this.mappedFileQueue.flush(flushPhysicQueueLeastPages);
                     long storeTimestamp = CommitLog.this.mappedFileQueue.getStoreTimestamp();
@@ -1134,6 +1172,7 @@ public class CommitLog {
             }
 
             // Normal shutdown, to ensure that all the flush before exit
+            // 正常关闭，确保都刷到磁盘
             boolean result = false;
             for (int i = 0; i < RETRY_TIMES_OVER && !result; i++) {
                 result = CommitLog.this.mappedFileQueue.flush(0);
@@ -1162,8 +1201,11 @@ public class CommitLog {
     }
 
     public static class GroupCommitRequest {
+        // 刷盘点偏移量
         private final long nextOffset;
+        // 倒记数锁存器
         private final CountDownLatch countDownLatch = new CountDownLatch(1);
+        // 刷盘结果， 初始为 false
         private volatile boolean flushOK = false;
 
         public GroupCommitRequest(long nextOffset) {
@@ -1174,6 +1216,10 @@ public class CommitLog {
             return nextOffset;
         }
 
+        /**
+         * GroupCommitService 线程处理 GroupCommitRequest 对象后将调用 wakeupCustomer 方法将消费发送线程唤醒，并将刷盘告知 GroupCommitRequest
+         * @param flushOK
+         */
         public void wakeupCustomer(final boolean flushOK) {
             this.flushOK = flushOK;
             this.countDownLatch.countDown();
@@ -1194,9 +1240,12 @@ public class CommitLog {
      * GroupCommit Service
      */
     class GroupCommitService extends FlushCommitLogService {
+        // 同步刷盘任务暂存容器
         private volatile List<GroupCommitRequest> requestsWrite = new ArrayList<GroupCommitRequest>();
+        // GroupCommitService 线程每次处理的 request 容器，这是一个设计亮点 ，避免了任务提交与任务执行的锁冲突
         private volatile List<GroupCommitRequest> requestsRead = new ArrayList<GroupCommitRequest>();
 
+        // 客户端提交同步刷盘任务到 GroupCommitService 线程，如果该线程处于等待状态则将其唤醒
         public synchronized void putRequest(final GroupCommitRequest request) {
             synchronized (this.requestsWrite) {
                 this.requestsWrite.add(request);
@@ -1206,32 +1255,43 @@ public class CommitLog {
             }
         }
 
+        /**
+         * 由于避免同步刷盘消费任务与其他消息生产者提交任务直接的锁竞争，GroupCommitService 提供读容器与写容器，这两个容器每执行完一次任务后，交互，继续消费任务
+         */
         private void swapRequests() {
             List<GroupCommitRequest> tmp = this.requestsWrite;
             this.requestsWrite = this.requestsRead;
             this.requestsRead = tmp;
         }
 
+        /**
+         * 执行刷盘操作，即调用 MappedByteBuffer#force 方法
+         */
         private void doCommit() {
             synchronized (this.requestsRead) {
                 if (!this.requestsRead.isEmpty()) {
+                    // 遍历同步刷盘任务列表，根据加入顺序逐一执行刷盘逻辑
                     for (GroupCommitRequest req : this.requestsRead) {
                         // There may be a message in the next file, so a maximum of
                         // two times the flush
                         boolean flushOK = false;
                         for (int i = 0; i < 2 && !flushOK; i++) {
+                            // 当前刷盘指针是否大于等于 nextOffset （当前偏移量+当前消息大小）
+                            // 如果已刷盘指针大于等于提交的刷盘点，表示刷盘成功，每执行一次刷盘操作后，立即调用 GroupCommitRequest#wakeupCustomer 唤醒消息发送线程并通知刷盘结果
                             flushOK = CommitLog.this.mappedFileQueue.getFlushedWhere() >= req.getNextOffset();
 
                             if (!flushOK) {
+                                // 执行刷盘，调用 mappedFileQueue#flush 方法执行刷盘操作，最终会调用 mappedByteBuffer#force() 方法
                                 CommitLog.this.mappedFileQueue.flush(0);
                             }
                         }
-
+                        // 唤醒消息发送线程并通知刷盘结果
                         req.wakeupCustomer(flushOK);
                     }
 
                     long storeTimestamp = CommitLog.this.mappedFileQueue.getStoreTimestamp();
                     if (storeTimestamp > 0) {
+                        // 处理完所有同步刷盘任务后，更新刷盘检测点 StoreCheckpoint 中的 physicMsgTimestamp，但并没有执行检测点的刷盘操作，刷盘检测点的刷盘操作将在写消息队列文件时触发
                         CommitLog.this.defaultMessageStore.getStoreCheckpoint().setPhysicMsgTimestamp(storeTimestamp);
                     }
 
@@ -1244,11 +1304,15 @@ public class CommitLog {
             }
         }
 
+        /**
+         * GroupCommitService 每处理一批同步刷盘请求（ requestsRead 容器中请求）后 “休息” 1Oms，然后继续处理下一批，其任务的核心实现为 doCommit 方法
+         */
         public void run() {
             CommitLog.log.info(this.getServiceName() + " service started");
 
             while (!this.isStopped()) {
                 try {
+                    // 将 hasNotified 置为 false，调用 onWaitEnd() -> swapRequests() 交换容器
                     this.waitForRunning(10);
                     this.doCommit();
                 } catch (Exception e) {
@@ -1259,6 +1323,7 @@ public class CommitLog {
             // Under normal circumstances shutdown, wait for the arrival of the
             // request, and then flush
             try {
+                // 休息 10ms
                 Thread.sleep(10);
             } catch (InterruptedException e) {
                 CommitLog.log.warn("GroupCommitService Exception, ", e);
