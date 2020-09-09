@@ -623,6 +623,7 @@ public class CommitLog {
                 queueId = ScheduleMessageService.delayLevel2QueueId(msg.getDelayTimeLevel());
 
                 // Backup real topic, queueId
+                // 在存入 Commitlog 文件之前，如果消息的延迟级别 delayTimeLevel 大于 0，替换消息的主题与队列为定时任务主题 "SCHEDULE_TOPIC"，队列 ID 为延迟级别减1，再次将消息主题、队列存入消息的属性中，键分别为 PROPERTY_REAL_TOPIC、PROPERTY_REAL_QUEUE_ID
                 MessageAccessor.putProperty(msg, MessageConst.PROPERTY_REAL_TOPIC, msg.getTopic());
                 MessageAccessor.putProperty(msg, MessageConst.PROPERTY_REAL_QUEUE_ID, String.valueOf(msg.getQueueId()));
                 msg.setPropertiesString(MessageDecoder.messageProperties2String(msg.getProperties()));

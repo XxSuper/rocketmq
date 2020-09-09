@@ -68,6 +68,7 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
         SendMessageContext mqtraceContext;
         switch (request.getCode()) {
             case RequestCode.CONSUMER_SEND_MSG_BACK:
+                // ack
                 return this.consumerSendMsgBack(ctx, request);
             default:
                 SendMessageRequestHeader requestHeader = parseRequestHeader(request);
@@ -96,12 +97,22 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
             this.brokerController.getMessageStore().isTransientStorePoolDeficient();
     }
 
+    /**
+     * ACK 消息存入 CommitLog 文件后 ，将依托 RocketMQ 定时消息机制在延迟时间到期后再次将消息拉取，提交消费线程池，ACK 消息是同步发送的，如果在发送过程中出现错误，将记录所有发送 ACK 消息失败的消息然后再次封装成 ConsumeRequest，延迟 Ss 执行
+     * @param ctx
+     * @param request
+     * @return
+     * @throws RemotingCommandException
+     */
     private RemotingCommand consumerSendMsgBack(final ChannelHandlerContext ctx, final RemotingCommand request)
         throws RemotingCommandException {
+        // 创建响应命令
         final RemotingCommand response = RemotingCommand.createResponseCommand(null);
+        // 解码请求头
         final ConsumerSendMsgBackRequestHeader requestHeader =
             (ConsumerSendMsgBackRequestHeader)request.decodeCommandCustomHeader(ConsumerSendMsgBackRequestHeader.class);
 
+        // 获取命名空间
         String namespace = NamespaceUtil.getNamespaceFromResource(requestHeader.getGroup());
         if (this.hasConsumeMessageHook() && !UtilAll.isBlank(requestHeader.getOriginMsgId())) {
 
@@ -112,10 +123,11 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
             context.setCommercialRcvStats(BrokerStatsManager.StatsType.SEND_BACK);
             context.setCommercialRcvTimes(1);
             context.setCommercialOwner(request.getExtFields().get(BrokerStatsManager.COMMERCIAL_OWNER));
-
+            // 执行钩子函数
             this.executeConsumeMessageHookAfter(context);
         }
 
+        // 获取消费组的订阅配置信息，如果配置信息为空返回配置组信息不存在错误如果重试队列数量小于 1，则直接返回成功，说明该消费组不支持重试
         SubscriptionGroupConfig subscriptionGroupConfig =
             this.brokerController.getSubscriptionGroupManager().findSubscriptionGroupConfig(requestHeader.getGroup());
         if (null == subscriptionGroupConfig) {
@@ -125,19 +137,23 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
             return response;
         }
 
+        // 如果 brokerConfig 配置 brokerPermission 为 PermName.PERM_READ，不允许写，返回 NO_PERMISSION
         if (!PermName.isWriteable(this.brokerController.getBrokerConfig().getBrokerPermission())) {
             response.setCode(ResponseCode.NO_PERMISSION);
             response.setRemark("the broker[" + this.brokerController.getBrokerConfig().getBrokerIP1() + "] sending message is forbidden");
             return response;
         }
 
+        // 如果消费组的订阅配置信息重试队列个数小于等于0，则直接返回成功
         if (subscriptionGroupConfig.getRetryQueueNums() <= 0) {
             response.setCode(ResponseCode.SUCCESS);
             response.setRemark(null);
             return response;
         }
 
+        // 创建重试主题，重试主题名称 %RETRY%＋消费组名称，，并从重试队列中随机选择一个队列，并构建 TopicConfig 主题配置信息
         String newTopic = MixAll.getRetryTopic(requestHeader.getGroup());
+        // 随机选择一个队列
         int queueIdInt = Math.abs(this.random.nextInt() % 99999999) % subscriptionGroupConfig.getRetryQueueNums();
 
         int topicSysFlag = 0;
@@ -145,22 +161,24 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
             topicSysFlag = TopicSysFlag.buildSysFlag(false, true);
         }
 
+        // 构建 TopicConfig 主题配置信息
         TopicConfig topicConfig = this.brokerController.getTopicConfigManager().createTopicInSendMessageBackMethod(
             newTopic,
             subscriptionGroupConfig.getRetryQueueNums(),
             PermName.PERM_WRITE | PermName.PERM_READ, topicSysFlag);
+        // 没有主题配置信息返回 SYSTEM_ERROR
         if (null == topicConfig) {
             response.setCode(ResponseCode.SYSTEM_ERROR);
             response.setRemark("topic[" + newTopic + "] not exist");
             return response;
         }
-
         if (!PermName.isWriteable(topicConfig.getPerm())) {
             response.setCode(ResponseCode.NO_PERMISSION);
             response.setRemark(String.format("the topic[%s] sending message is forbidden", newTopic));
             return response;
         }
 
+        // 根据消息物理偏移量从 commitlog 文件中获取消息，同时将消息的主题存入属性中
         MessageExt msgExt = this.brokerController.getMessageStore().lookMessageByOffset(requestHeader.getOffset());
         if (null == msgExt) {
             response.setCode(ResponseCode.SYSTEM_ERROR);
@@ -168,12 +186,14 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
             return response;
         }
 
+        // 将消息的主题存入属性中
         final String retryTopic = msgExt.getProperty(MessageConst.PROPERTY_RETRY_TOPIC);
         if (null == retryTopic) {
             MessageAccessor.putProperty(msgExt, MessageConst.PROPERTY_RETRY_TOPIC, msgExt.getTopic());
         }
         msgExt.setWaitStoreMsgOK(false);
 
+        // 设置消息重试次数
         int delayLevel = requestHeader.getDelayLevel();
 
         int maxReconsumeTimes = subscriptionGroupConfig.getRetryMaxTimes();
@@ -181,12 +201,13 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
             maxReconsumeTimes = requestHeader.getMaxReconsumeTimes();
         }
 
-        // 如果消息重试次数超过允许的最大重试次数，消息将进入 DLD 延迟队列，延迟队列主题： %DLQ%＋消费组名
+        // 如果消息重试次数超过允许的最大重试次数，消息将进入 DLD，主题： %DLQ%＋消费组名
         if (msgExt.getReconsumeTimes() >= maxReconsumeTimes
             || delayLevel < 0) {
+            // 再次改变 newTopic 主题为 DLQ ("%DLQ%")
             newTopic = MixAll.getDLQTopic(requestHeader.getGroup());
             queueIdInt = Math.abs(this.random.nextInt() % 99999999) % DLQ_NUMS_PER_GROUP;
-
+            // 该主题的权限为只写，说明消息一旦进入到 DLQ 队列中，RocketMQ 将不负责再次调度进行消费了，需要人工干预
             topicConfig = this.brokerController.getTopicConfigManager().createTopicInSendMessageBackMethod(newTopic,
                 DLQ_NUMS_PER_GROUP,
                 PermName.PERM_WRITE, 0
@@ -197,6 +218,7 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
                 return response;
             }
         } else {
+            // 设置消息重试次数
             if (0 == delayLevel) {
                 delayLevel = 3 + msgExt.getReconsumeTimes();
             }
@@ -204,6 +226,7 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
             msgExt.setDelayTimeLevel(delayLevel);
         }
 
+        // 根据原先的消息创建一个新的消息对象，重试消息会拥有自己的唯一消息 ID(msgId)并存人到 commitlog 文件中，并不会去更新原先消息是会将原先的主题、 消息 ID 存入消息的属性中，主题名称为重试主题，其他属性与原先消息保持相同
         MessageExtBrokerInner msgInner = new MessageExtBrokerInner();
         msgInner.setTopic(newTopic);
         msgInner.setBody(msgExt.getBody());
@@ -222,6 +245,7 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
         String originMsgId = MessageAccessor.getOriginMessageId(msgExt);
         MessageAccessor.setOriginMessageId(msgInner, UtilAll.isBlank(originMsgId) ? msgExt.getMsgId() : originMsgId);
 
+        // 将消息存入到 CommitLog 文件中
         PutMessageResult putMessageResult = this.brokerController.getMessageStore().putMessage(msgInner);
         if (putMessageResult != null) {
             switch (putMessageResult.getPutMessageStatus()) {

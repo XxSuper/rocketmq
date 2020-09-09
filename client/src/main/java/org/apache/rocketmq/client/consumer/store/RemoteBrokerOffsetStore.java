@@ -37,6 +37,7 @@ import org.apache.rocketmq.common.protocol.header.UpdateConsumerOffsetRequestHea
 import org.apache.rocketmq.remoting.exception.RemotingException;
 
 /**
+ * 远程存储消费进度的具体实现，给集群模式使用，将消费进度存储在 broker
  * Remote storage implementation
  */
 public class RemoteBrokerOffsetStore implements OffsetStore {
@@ -58,13 +59,17 @@ public class RemoteBrokerOffsetStore implements OffsetStore {
     @Override
     public void updateOffset(MessageQueue mq, long offset, boolean increaseOnly) {
         if (mq != null) {
+            // 将 offset 更新到内存中，使用 ConcurrentHashMap 保存 MessageQueue 的消费进度
+            // 获取旧的消费进度
             AtomicLong offsetOld = this.offsetTable.get(mq);
             if (null == offsetOld) {
+                // 不存在则初始化
                 offsetOld = this.offsetTable.putIfAbsent(mq, new AtomicLong(offset));
             }
 
             if (null != offsetOld) {
                 if (increaseOnly) {
+                    // 只增不减
                     MixAll.compareAndIncreaseOnly(offsetOld, offset);
                 } else {
                     offsetOld.set(offset);
@@ -73,6 +78,12 @@ public class RemoteBrokerOffsetStore implements OffsetStore {
         }
     }
 
+    /**
+     * readOffset 读取 offset，有三种读取模式，从内存，从远端，先内存再远端。在需要从远端读取的情况下会构造 netty 请求从远端读取，并更新到本地。
+     * @param mq
+     * @param type
+     * @return
+     */
     @Override
     public long readOffset(final MessageQueue mq, final ReadOffsetType type) {
         if (mq != null) {
@@ -115,7 +126,7 @@ public class RemoteBrokerOffsetStore implements OffsetStore {
     public void persistAll(Set<MessageQueue> mqs) {
         if (null == mqs || mqs.isEmpty())
             return;
-
+        // 未使用的消息队列
         final HashSet<MessageQueue> unusedMQ = new HashSet<MessageQueue>();
 
         for (Map.Entry<MessageQueue, AtomicLong> entry : this.offsetTable.entrySet()) {
@@ -124,6 +135,7 @@ public class RemoteBrokerOffsetStore implements OffsetStore {
             if (offset != null) {
                 if (mqs.contains(mq)) {
                     try {
+                        // 更新 broker 端消费进度
                         this.updateConsumeOffsetToBroker(mq, offset.get());
                         log.info("[persistAll] Group: {} ClientId: {} updateConsumeOffsetToBroker {} {}",
                             this.groupName,
@@ -140,6 +152,7 @@ public class RemoteBrokerOffsetStore implements OffsetStore {
         }
 
         if (!unusedMQ.isEmpty()) {
+            // 从 offsetTable 中移除未使用的消息队列
             for (MessageQueue mq : unusedMQ) {
                 this.offsetTable.remove(mq);
                 log.info("remove unused mq, {}, {}", mq, this.groupName);
@@ -199,13 +212,17 @@ public class RemoteBrokerOffsetStore implements OffsetStore {
     @Override
     public void updateConsumeOffsetToBroker(MessageQueue mq, long offset, boolean isOneway) throws RemotingException,
         MQBrokerException, InterruptedException, MQClientException {
+        // 获取 Broker 地址
         FindBrokerResult findBrokerResult = this.mQClientFactory.findBrokerAddressInAdmin(mq.getBrokerName());
         if (null == findBrokerResult) {
+            // 如果未获取到 Broker 地址，从 NameServer 更新 topic 路由信息
             this.mQClientFactory.updateTopicRouteInfoFromNameServer(mq.getTopic());
+            // 重新获取 Broker 地址
             findBrokerResult = this.mQClientFactory.findBrokerAddressInAdmin(mq.getBrokerName());
         }
 
         if (findBrokerResult != null) {
+            // 组装请求参数
             UpdateConsumerOffsetRequestHeader requestHeader = new UpdateConsumerOffsetRequestHeader();
             requestHeader.setTopic(mq.getTopic());
             requestHeader.setConsumerGroup(this.groupName);

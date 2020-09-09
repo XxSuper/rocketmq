@@ -234,6 +234,7 @@ public class BrokerController {
     public boolean initialize() throws CloneNotSupportedException {
         boolean result = this.topicConfigManager.load();
 
+        // 加载消费进度数据到内存
         result = result && this.consumerOffsetManager.load();
         result = result && this.subscriptionGroupManager.load();
         result = result && this.consumerFilterManager.load();
@@ -345,6 +346,7 @@ public class BrokerController {
                 }
             }, initialDelay, period, TimeUnit.MILLISECONDS);
 
+            // 定时持久化消费进度到文件中
             this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
                 @Override
                 public void run() {
@@ -544,6 +546,9 @@ public class BrokerController {
         }
     }
 
+    /**
+     * 注册处理类放入 NettyRemotingAbstract#processorTable 中
+     */
     public void registerProcessor() {
         /**
          * SendMessageProcessor
@@ -562,6 +567,7 @@ public class BrokerController {
         this.fastRemotingServer.registerProcessor(RequestCode.CONSUMER_SEND_MSG_BACK, sendProcessor, this.sendMessageExecutor);
         /**
          * PullMessageProcessor
+         * 拉取消息
          */
         this.remotingServer.registerProcessor(RequestCode.PULL_MESSAGE, this.pullMessageProcessor, this.pullMessageExecutor);
         this.pullMessageProcessor.registerConsumeMessageHook(consumeMessageHookList);

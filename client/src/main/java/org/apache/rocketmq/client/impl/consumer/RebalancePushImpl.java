@@ -85,6 +85,7 @@ public class RebalancePushImpl extends RebalanceImpl {
     public boolean removeUnnecessaryMessageQueue(MessageQueue mq, ProcessQueue pq) {
         this.defaultMQPushConsumerImpl.getOffsetStore().persist(mq);
         this.defaultMQPushConsumerImpl.getOffsetStore().removeOffset(mq);
+        // 如果是集群模式并且是顺序消息消费时，还需要先解锁队列
         if (this.defaultMQPushConsumerImpl.isConsumeOrderly()
             && MessageModel.CLUSTERING.equals(this.defaultMQPushConsumerImpl.messageModel())) {
             try {
@@ -137,6 +138,11 @@ public class RebalancePushImpl extends RebalanceImpl {
         this.defaultMQPushConsumerImpl.getOffsetStore().removeOffset(mq);
     }
 
+    /**
+     * RocketMQ 提供 CONSUME_FROM_LAST_OFFSET、CONSUME_FROM_FIRST_OFFSET、CONSUME_FROM_TIMESTAMP 方式，在创建消费者时可以通过调用 DefaultMQPushConsumer#setConsumeFromWhere 方法设置
+     * @param mq
+     * @return
+     */
     @Override
     public long computePullFromWhere(MessageQueue mq) {
         long result = -1;
@@ -147,8 +153,11 @@ public class RebalancePushImpl extends RebalanceImpl {
             case CONSUME_FROM_MIN_OFFSET:
             case CONSUME_FROM_MAX_OFFSET:
             case CONSUME_FROM_LAST_OFFSET: {
+                // 从队列最新偏移量开始消费
+                // offsetStore.readOffset(mq, ReadOffsetType.READ_FROM_STORE) 返回 -1，表示该消息队列刚创建
                 long lastOffset = offsetStore.readOffset(mq, ReadOffsetType.READ_FROM_STORE);
                 if (lastOffset >= 0) {
+                    // 从磁盘上读取到消息队列的消费进度，如果大于0直接返回
                     result = lastOffset;
                 }
                 // First start,no offset
@@ -157,48 +166,63 @@ public class RebalancePushImpl extends RebalanceImpl {
                         result = 0L;
                     } else {
                         try {
+                            // 如果 offsetStore.readOffset(mq, ReadOffsetType.READ_FROM_STORE) 返回 -1 并且不是重试消息队列则从 broker 中获取该消息队列当前最大偏移量
                             result = this.mQClientFactory.getMQAdminImpl().maxOffset(mq);
                         } catch (MQClientException e) {
                             result = -1;
                         }
                     }
                 } else {
+                    // 如果小于 -1，则表示该消息进度文件中存储了错误的偏移量，返回－1
                     result = -1;
                 }
                 break;
             }
             case CONSUME_FROM_FIRST_OFFSET: {
+                // 从头开始消费
+                // 从磁盘中读取到消息队列的消费进度
                 long lastOffset = offsetStore.readOffset(mq, ReadOffsetType.READ_FROM_STORE);
                 if (lastOffset >= 0) {
+                    // 如果大于 0 则直接返回即可
                     result = lastOffset;
                 } else if (-1 == lastOffset) {
+                    // 如果等于-1，直接返回 0，从头开始。
                     result = 0L;
                 } else {
+                    // 如果小于-1，则表示该消息进度文件中存储了错误的偏移量，返回－1
                     result = -1;
                 }
                 break;
             }
             case CONSUME_FROM_TIMESTAMP: {
+                // 从消费者启动的时间戳对应的消费进度开始消费
+                // 从磁盘中读取到消息队列的消费进度，
                 long lastOffset = offsetStore.readOffset(mq, ReadOffsetType.READ_FROM_STORE);
                 if (lastOffset >= 0) {
+                    // 如果大于 0 直接返回即可
                     result = lastOffset;
                 } else if (-1 == lastOffset) {
+                    // 如果等于 -1
                     if (mq.getTopic().startsWith(MixAll.RETRY_GROUP_TOPIC_PREFIX)) {
                         try {
+                            // 如果是重试消息队列则从 broker 中获取该消息队列当前最大偏移量
                             result = this.mQClientFactory.getMQAdminImpl().maxOffset(mq);
                         } catch (MQClientException e) {
                             result = -1;
                         }
                     } else {
                         try {
+                            // 会尝试去操作消息存储时间戳为消费者启动的时间戳
                             long timestamp = UtilAll.parseDate(this.defaultMQPushConsumerImpl.getDefaultMQPushConsumer().getConsumeTimestamp(),
                                 UtilAll.YYYYMMDDHHMMSS).getTime();
+                            // 如果能找到则返回找到的偏移量，否则返回 0
                             result = this.mQClientFactory.getMQAdminImpl().searchOffset(mq, timestamp);
                         } catch (MQClientException e) {
                             result = -1;
                         }
                     }
                 } else {
+                    // 如果小于-1，则表示该消息进度文件中存储了错误的偏移量，返回－1
                     result = -1;
                 }
                 break;

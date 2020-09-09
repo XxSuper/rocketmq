@@ -251,11 +251,11 @@ public class MQClientInstance {
                     // Start request-response channel
                     // 启动 netty
                     this.mQClientAPIImpl.start();
-                    // Start various schedule tasks
+                    // Start various schedule tasks 开启各种定时任务
                     this.startScheduledTask();
-                    // Start pull service
+                    // Start pull service 消息拉取线程
                     this.pullMessageService.start();
-                    // Start rebalance service
+                    // Start rebalance service 消息队列重新负载线程
                     this.rebalanceService.start();
                     // Start push service
                     this.defaultMQProducer.getDefaultMQProducerImpl().start(false);
@@ -290,6 +290,7 @@ public class MQClientInstance {
             @Override
             public void run() {
                 try {
+                    // 更新 topic 路由信息
                     MQClientInstance.this.updateTopicRouteInfoFromNameServer();
                 } catch (Exception e) {
                     log.error("ScheduledTask updateTopicRouteInfoFromNameServer exception", e);
@@ -315,6 +316,7 @@ public class MQClientInstance {
             @Override
             public void run() {
                 try {
+                    // 定时持久化消息消费进度
                     MQClientInstance.this.persistAllConsumerOffset();
                 } catch (Exception e) {
                     log.error("ScheduledTask persistAllConsumerOffset exception", e);
@@ -1002,6 +1004,9 @@ public class MQClientInstance {
         this.rebalanceService.wakeup();
     }
 
+    /**
+     * 遍历已注册的消费者，对消费者执行 doRebalance() 方法
+     */
     public void doRebalance() {
         for (Map.Entry<String, MQConsumerInner> entry : this.consumerTable.entrySet()) {
             MQConsumerInner impl = entry.getValue();

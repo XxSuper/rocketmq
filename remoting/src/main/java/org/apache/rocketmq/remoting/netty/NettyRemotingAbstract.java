@@ -460,6 +460,9 @@ public abstract class NettyRemotingAbstract {
 
             final ResponseFuture responseFuture = new ResponseFuture(channel, opaque, timeoutMillis - costTime, invokeCallback, once);
             // 将 key：请求id value：响应future 写入ConcurrentMap<Integer /* opaque */, ResponseFuture> responseTable 缓存
+            // 此处放入 responseTable 后，netty handle 在接收到响应写入后会调用 responseTable.get(opaque) 获取，再做相应的响应处理
+            // 调用链：
+            // NettyRemotingAbstract.processMessageReceived -> NettyRemotingAbstract.processResponseCommand -> NettyRemotingAbstract.executeInvokeCallback#ResponseFuture.executeInvokeCallback
             this.responseTable.put(opaque, responseFuture);
             try {
                 // 向 channel 写入消息，并添加监听

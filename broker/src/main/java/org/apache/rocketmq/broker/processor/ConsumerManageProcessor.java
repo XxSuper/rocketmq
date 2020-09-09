@@ -50,10 +50,13 @@ public class ConsumerManageProcessor implements NettyRequestProcessor {
     public RemotingCommand processRequest(ChannelHandlerContext ctx, RemotingCommand request)
         throws RemotingCommandException {
         switch (request.getCode()) {
+            // 查询消费者列表
             case RequestCode.GET_CONSUMER_LIST_BY_GROUP:
                 return this.getConsumerListByGroup(ctx, request);
+            // 更新 offset
             case RequestCode.UPDATE_CONSUMER_OFFSET:
                 return this.updateConsumerOffset(ctx, request);
+            // 查询 offset
             case RequestCode.QUERY_CONSUMER_OFFSET:
                 return this.queryConsumerOffset(ctx, request);
             default:

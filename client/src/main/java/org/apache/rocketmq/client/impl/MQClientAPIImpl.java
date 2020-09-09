@@ -777,14 +777,18 @@ public class MQClientAPIImpl {
         final long timeoutMillis,
         final PullCallback pullCallback
     ) throws RemotingException, InterruptedException {
+        // NettyRemotingClient 在收到服务端响应结果后会回调 PullCallback 的 onSuccess 或 onException，PullCallBack 在 DefaultMQPushConsumerlmpl#pullMessage 中创建
         this.remotingClient.invokeAsync(addr, request, timeoutMillis, new InvokeCallback() {
             @Override
             public void operationComplete(ResponseFuture responseFuture) {
+                // 消息拉取客户端处理消息
                 RemotingCommand response = responseFuture.getResponseCommand();
                 if (response != null) {
                     try {
+                        // 处理拉取结果
                         PullResult pullResult = MQClientAPIImpl.this.processPullResponse(response);
                         assert pullResult != null;
+                        // 执行拉取回调
                         pullCallback.onSuccess(pullResult);
                     } catch (Exception e) {
                         pullCallback.onException(e);
@@ -815,6 +819,7 @@ public class MQClientAPIImpl {
 
     private PullResult processPullResponse(
         final RemotingCommand response) throws MQBrokerException, RemotingCommandException {
+        // 根据响应结果解码成 PullResultExt 对象
         PullStatus pullStatus = PullStatus.NO_NEW_MSG;
         switch (response.getCode()) {
             case ResponseCode.SUCCESS:
@@ -836,7 +841,7 @@ public class MQClientAPIImpl {
 
         PullMessageResponseHeader responseHeader =
             (PullMessageResponseHeader) response.decodeCommandCustomHeader(PullMessageResponseHeader.class);
-
+        // 此时只是从网络中读取消息列表到 byte[] messageBinary
         return new PullResultExt(pullStatus, responseHeader.getNextBeginOffset(), responseHeader.getMinOffset(),
             responseHeader.getMaxOffset(), null, responseHeader.getSuggestWhichBrokerId(), response.getBody());
     }

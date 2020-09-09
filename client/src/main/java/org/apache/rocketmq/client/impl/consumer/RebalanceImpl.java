@@ -219,6 +219,8 @@ public abstract class RebalanceImpl {
     }
 
     public void doRebalance(final boolean isOrder) {
+        // 遍历订阅信息对每个主题的队列进行重新负载，Map<String, SubscriptionData> subTable 在调用消费者 DefaultMQPushConsumerImpl#subscribe() 方法时填充
+        // 如果订阅信息发送变化，例如调用了 unsubscribe() 方法，则需要将不关心的主题消费队列从 ConcurrentMap<String /* topic */, SubscriptionData> subscriptionInner 中移除
         Map<String, SubscriptionData> subTable = this.getSubscriptionInner();
         if (subTable != null) {
             for (final Map.Entry<String, SubscriptionData> entry : subTable.entrySet()) {
@@ -259,8 +261,15 @@ public abstract class RebalanceImpl {
                 }
                 break;
             }
+            // 集群模式
             case CLUSTERING: {
+                // consumer 启动后将获取订阅信息填充到 RebalanceImpl -> ConcurrentMap<String/* topic */, Set<MessageQueue>> topicSubscribeInfoTable
+                // 从主题订阅信息缓存表中获取主题的队列信息
                 Set<MessageQueue> mqSet = this.topicSubscribeInfoTable.get(topic);
+                // consumer 启动后将获取路由信息填充到 MQClientInstance -> ConcurrentMap<String/* Topic */, TopicRouteData> topicRouteTable
+                // 发送请求从 Broker 中获取该消费组内当前所有的消费者客户端 ID，主题 topic 的队列可能分布在多个 Broker上，请求发往哪个 Broker 呢？ RocketeMQ 从主题的路由信息中随机选择一个 Broker。 Broker
+                // 为什么会存在消费组内所有的消费者的信息呢？我们不妨回忆下消费者在启动的时候会向 MQClientInstance 中注册消费者，然后 MQClientInstance 向所有的 Broker 发送心跳包，
+                // 心跳包中包含 MQClientInstance 的消费者信息。如果 mqSet、cidAll 任意一个为空则忽略本消息队列负载
                 List<String> cidAll = this.mQClientFactory.findConsumerIdList(topic, consumerGroup);
                 if (null == mqSet) {
                     if (!topic.startsWith(MixAll.RETRY_GROUP_TOPIC_PREFIX)) {
@@ -275,10 +284,11 @@ public abstract class RebalanceImpl {
                 if (mqSet != null && cidAll != null) {
                     List<MessageQueue> mqAll = new ArrayList<MessageQueue>();
                     mqAll.addAll(mqSet);
-
+                    // 首先对 cidAll,mqAll 排序，这个很重要，同一个消费组内看到的视图保持一致，确保同一个消费队列不会被多个消费者分配。
                     Collections.sort(mqAll);
                     Collections.sort(cidAll);
 
+                    // RocketMQ 消息队列分配算法接口，RocketMQ 默认提供了五种分配算法
                     AllocateMessageQueueStrategy strategy = this.allocateMessageQueueStrategy;
 
                     List<MessageQueue> allocateResult = null;
@@ -330,10 +340,17 @@ public abstract class RebalanceImpl {
         }
     }
 
+    /**
+     *
+     * @param topic
+     * @param mqSet
+     * @param isOrder
+     * @return
+     */
     private boolean updateProcessQueueTableInRebalance(final String topic, final Set<MessageQueue> mqSet,
         final boolean isOrder) {
         boolean changed = false;
-
+        // ConcurrentMap<MessageQueue, ProcessQueue> processQueueTable ，当前消费者负载的消息队列缓存表
         Iterator<Entry<MessageQueue, ProcessQueue>> it = this.processQueueTable.entrySet().iterator();
         while (it.hasNext()) {
             Entry<MessageQueue, ProcessQueue> next = it.next();
@@ -342,7 +359,10 @@ public abstract class RebalanceImpl {
 
             if (mq.getTopic().equals(topic)) {
                 if (!mqSet.contains(mq)) {
+                    // 如果缓存表中的 MessageQueue 不包含在 mqSet 中，说明经过本次消息队列负载后，该 mq 被分配给其他消费者，故需要暂停该消息队列消息的消费
+                    // 方法是将 ProccessQueue 的状态设置为 dropped＝true，该 ProcessQueue 中的消息将不会再被消费
                     pq.setDropped(true);
+                    // 调用 removeUnnecessaryMessageQueue 方法判断是否将 MessageQueue、ProccessQueue 从缓存表中移除。主要持久化待移除 MessageQueue 消息消费进度
                     if (this.removeUnnecessaryMessageQueue(mq, pq)) {
                         it.remove();
                         changed = true;
@@ -368,16 +388,20 @@ public abstract class RebalanceImpl {
             }
         }
 
+        // 遍历本次负载分配到的队列集合
         List<PullRequest> pullRequestList = new ArrayList<PullRequest>();
         for (MessageQueue mq : mqSet) {
+            // 如果 processQueueTable 中没有包含该消息队列，表明这是本次新增加的消息队列
             if (!this.processQueueTable.containsKey(mq)) {
                 if (isOrder && !this.lock(mq)) {
                     log.warn("doRebalance, {}, add a new mq failed, {}, because lock failed", consumerGroup, mq);
                     continue;
                 }
-
+                // 首先从内存中移除该消息队列的消费进度
                 this.removeDirtyOffset(mq);
                 ProcessQueue pq = new ProcessQueue();
+                // 然后从磁盘中读取该消息队列的消费进度，创建 PullRequest 对象，RocketMQ 提供 CONSUME_FROM_LAST_OFFSET、CONSUME_FROM_FIRST_OFFSET、CONSUME_FROM_TIMESTAMP 方式，
+                // 在创建消费者时可以通过调用 DefaultMQPushConsumer#setConsumeFromWhere 方法设置
                 long nextOffset = this.computePullFromWhere(mq);
                 if (nextOffset >= 0) {
                     ProcessQueue pre = this.processQueueTable.putIfAbsent(mq, pq);
@@ -394,11 +418,13 @@ public abstract class RebalanceImpl {
                         changed = true;
                     }
                 } else {
+                    // 如果读取到的消费进度小于 0，则需要校对消费进度
                     log.warn("doRebalance, {}, add new mq failed, {}", consumerGroup, mq);
                 }
             }
         }
 
+        // 将 PullRequest 放入到 PullMessageService 中，以便唤醒 PullMessageService 线程
         this.dispatchPullRequest(pullRequestList);
 
         return changed;

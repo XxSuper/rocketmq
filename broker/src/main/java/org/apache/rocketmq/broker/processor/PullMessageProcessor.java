@@ -67,6 +67,13 @@ import org.apache.rocketmq.store.PutMessageResult;
 import org.apache.rocketmq.store.config.BrokerRole;
 import org.apache.rocketmq.store.stats.BrokerStatsManager;
 
+/**
+ * RocketMQ 并没有真正实现推模式，而是消费者主动向消息服务器拉取消息， RocketMQ 推模式是循环向消息服务端发送消息拉取请求，如果消息消费者向 RocketMQ 发送消息拉取
+ * 时，消息并未到达消费队列，如果不启用长轮询机制，则会在服务端等待 shortPollingTimeMills 时间后（挂起）再去判断消息是否已到达消息队列，如果消息未到达则提示消息拉
+ * 取客户端 PULL_NOT_FOUND （消息不存在），如果开启长轮询模式， RocketMQ 一方面会每 5s 轮询检查一次消息是否可达，同时一有新消息到达后立马通知挂起线程再次验证新消息是
+ * 否是自己感兴趣的消息，如果是则从 commitlog 文件提取消息返回给消息拉取客户端，否则直到挂起超时，超时时间由消息拉取方在消息拉取时封装在请求参数中， PUSH 模式默认为
+ * 15s, PULL 模式通过 DefaultMQPullConsumer#setBrokerSuspendMaxTimeMillis 设置。RocketMQ 通过在 Broker 端配置 longPollingEnable 为 true 来开启长轮询模式
+ */
 public class PullMessageProcessor implements NettyRequestProcessor {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.BROKER_LOGGER_NAME);
     private final BrokerController brokerController;
@@ -87,8 +94,24 @@ public class PullMessageProcessor implements NettyRequestProcessor {
         return false;
     }
 
+    /**
+     * 服务器端消息拉取处理完毕，将返回结果到拉取消息调用方。在调用方， 需要重点关注 PULL_RETRY_IMMEDIATELY、PULL_OFFSET_MOVED、PULL_NOT_FOUND 等情况下如何校正拉取偏移量
+     * @param channel 网络通道，通过该通道向消息拉取客户端发送响应结果
+     * @param request 消息拉取请求
+     * @param brokerAllowSuspend  Broker 端是否支持挂起，处理消息拉取时默认传入 true，表示支持如果未找到消息则挂起，如果该参数为 false ，未找到消息时直接返回客户端消息未找到
+     *                            1、如果 brokerAllowSuspend 为 true，表示支持挂起 ，则将响应对象 response 设置为 null，将不会立即向客户端写入响应， hasSuspendFlag 参数在拉取消息时构建的拉取标记，
+     *                            默认为 true
+     *                            2、默认支持挂起，根据是否开启长轮训询来决定挂起方式，如果支持长轮询模式，挂起超时时间来源于请求参数， PUSH 模式默认 15s, PULL模式通过 DefaultMQPullConsumer#brokerSuspenMaxTimeMillis 设置，
+     *                            默认 20 s，然后创建拉取任务 PullRequest 并提交 PullRequestHoldService 线程中
+     *                            RocketMQ 轮询机制由两个线程共同来完成：
+     *                            1) PullRequestHoldService 每隔 5s 重试一次
+     *                            2) DefaultMessageStore#ReputMessageService 每处理一次重新拉取，Thread.sleep(1)，继续下一次检查
+     * @return
+     * @throws RemotingCommandException
+     */
     private RemotingCommand processRequest(final Channel channel, RemotingCommand request, boolean brokerAllowSuspend)
         throws RemotingCommandException {
+        // 根据订阅信息，构建消息过滤器
         RemotingCommand response = RemotingCommand.createResponseCommand(PullMessageResponseHeader.class);
         final PullMessageResponseHeader responseHeader = (PullMessageResponseHeader) response.readCustomHeader();
         final PullMessageRequestHeader requestHeader =
@@ -234,15 +257,19 @@ public class PullMessageProcessor implements NettyRequestProcessor {
                 this.brokerController.getConsumerFilterManager());
         }
 
+        // 调用 MessageStore.getMessage 查找消息，
         final GetMessageResult getMessageResult =
             this.brokerController.getMessageStore().getMessage(requestHeader.getConsumerGroup(), requestHeader.getTopic(),
                 requestHeader.getQueueId(), requestHeader.getQueueOffset(), requestHeader.getMaxMsgNums(), messageFilter);
         if (getMessageResult != null) {
+            // 根据 pullResult 填充 responseHeader 的 nextBeginOffset、minOffset、maxOffset
             response.setRemark(getMessageResult.getStatus().name());
+            // 下一次开始的 index 条目数
             responseHeader.setNextBeginOffset(getMessageResult.getNextBeginOffset());
             responseHeader.setMinOffset(getMessageResult.getMinOffset());
             responseHeader.setMaxOffset(getMessageResult.getMaxOffset());
 
+            // 根据主从同步延迟，如果从节点数据包含下一次拉取的偏移量，设置下一次拉取任务的 brokerId
             if (getMessageResult.isSuggestPullingFromSlave()) {
                 responseHeader.setSuggestWhichBrokerId(subscriptionGroupConfig.getWhichBrokerWhenConsumeSlowly());
             } else {
@@ -274,11 +301,13 @@ public class PullMessageProcessor implements NettyRequestProcessor {
                 responseHeader.setSuggestWhichBrokerId(MixAll.MASTER_ID);
             }
 
+            // 根据 GetMessageResult 编码转换成关系
             switch (getMessageResult.getStatus()) {
                 case FOUND:
                     response.setCode(ResponseCode.SUCCESS);
                     break;
                 case MESSAGE_WAS_REMOVING:
+                    // 消息存放在下一个 commitlog 文件中
                     response.setCode(ResponseCode.PULL_RETRY_IMMEDIATELY);
                     break;
                 case NO_MATCHED_LOGIC_QUEUE:
@@ -405,10 +434,12 @@ public class PullMessageProcessor implements NettyRequestProcessor {
                     }
                     break;
                 case ResponseCode.PULL_NOT_FOUND:
-
+                    // 消息拉取时服务端从 Commitlog 未找到消息
                     if (brokerAllowSuspend && hasSuspendFlag) {
+                        // 如果启用长轮询机制通过 DefaultMQPullConsumer#setBrokerSuspendMaxTimeMillis 设置挂起超时时间
                         long pollingTimeMills = suspendTimeoutMillisLong;
                         if (!this.brokerController.getBrokerConfig().isLongPollingEnable()) {
+                            // 如果不启用长轮询机制，则会在服务端等待 shortPollingTimeMills
                             pollingTimeMills = this.brokerController.getBrokerConfig().getShortPollingTimeMills();
                         }
 
@@ -459,6 +490,7 @@ public class PullMessageProcessor implements NettyRequestProcessor {
             response.setRemark("store getMessage return null");
         }
 
+        // 如果 commitlog 标记可用，并且当前节点为主节点，则更新消息消费进度
         boolean storeOffsetEnable = brokerAllowSuspend;
         storeOffsetEnable = storeOffsetEnable && hasCommitOffsetFlag;
         storeOffsetEnable = storeOffsetEnable
@@ -551,6 +583,8 @@ public class PullMessageProcessor implements NettyRequestProcessor {
             @Override
             public void run() {
                 try {
+                    // 这里的核心又回到长轮询的入口代码，其核心 brokerAllowSuspend 为 false，表示不支持拉取线程挂起，即当根据偏移量无法获取到消息时将不挂起线程等待新消
+                    // 息到来，而是直接返回告诉客户端本次消息拉取未找到消息
                     final RemotingCommand response = PullMessageProcessor.this.processRequest(channel, request, false);
 
                     if (response != null) {
