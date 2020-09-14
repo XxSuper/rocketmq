@@ -86,7 +86,7 @@ import org.apache.rocketmq.remoting.netty.NettyClientConfig;
 import org.apache.rocketmq.remoting.protocol.RemotingCommand;
 
 /**
- * MQClientlnstance 封装了 RocketMQ 网络处理 API ，是消息生产者（ Producer ）、消息消费者（ Consumer ）与 NameServer、Broker 打交道的网络通道
+ * MQClientInstance 封装了 RocketMQ 网络处理 API ，是消息生产者（ Producer ）、消息消费者（ Consumer ）与 NameServer、Broker 打交道的网络通道
  */
 public class MQClientInstance {
     private final static long LOCK_TIMEOUT_MILLIS = 3000;

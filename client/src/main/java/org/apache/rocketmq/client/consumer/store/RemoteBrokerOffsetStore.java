@@ -37,7 +37,15 @@ import org.apache.rocketmq.common.protocol.header.UpdateConsumerOffsetRequestHea
 import org.apache.rocketmq.remoting.exception.RemotingException;
 
 /**
- * 远程存储消费进度的具体实现，给集群模式使用，将消费进度存储在 broker
+ * 集群模式消费进度存储，集群模式消息进度存储文件存放在消息服务端 broker
+ * 消息消费进度的读取，持久化与广播模式实现细节差不多，集群模式消息进度如果从内存中读取消费进度，则从 RemoteBrokerOffsetStore 的 ConcurrentMap<MessageQueue, AtomicLong> offsetTable =new ConcurrentHashMap<MessageQueue, AtomicLong>()
+ * 中根据消息消费队列获取其消息消费进度；如果从磁盘读取，则发送网络请求，请求命令为 QUERY_CONSUMER_OFFSET。持久化消息进度，则请求命令为 UPDATE_CONSUMER_OFFSET，更新 ConsumerOffsetManager 的
+ * ConcurrentMap<String/* topic@group/*, ConcurrentMap<Integer /＊消息队列 ID/*, Long/＊消息消费进度＊／> offsetTable, Broker 端默认 10s 持久化一次消息进度，存储文件名：${RocketMQ_ HOME}/store/config/consumerOffset.json
+ * {
+ *    "offsetTable":{"TopicTest@DataSyncConnsumeGroup":{0:38,2:27,1:37,3:38},
+ *    "%RETRY%DataSyncConnsumeGroup@DataSyncConnsumeGroup": {0:0}
+ * }
+ *
  * Remote storage implementation
  */
 public class RemoteBrokerOffsetStore implements OffsetStore {

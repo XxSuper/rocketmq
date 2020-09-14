@@ -36,17 +36,34 @@ import org.apache.rocketmq.common.message.MessageQueue;
 import org.apache.rocketmq.remoting.exception.RemotingException;
 
 /**
- * 本地存储消费进度的具体实现，给广播模式使用
+ * 消息进度存储内容，广播模式消费进度与消费组没啥关系，直接保存 MessageQueue:Offset：
+ * {
+ *    "offsetTable":{
+ *        {"brokerName:"broker-a","queueid": 3,"topic":"TopicTest"}:2,
+ *        {"brokerName:"broker-a","queueid": 2,"topic":"TopicTest"}:1,
+ *        {"brokerName:"broker-a","queueid": 1,"topic":"TopicTest"}:2,
+ *        {"brokerName:"broker-a","queueid": 0,"topic":"TopicTest"}:1
+ *    }
+ * }
+ *
+ *
+ * 广播模式消费进度存储
+ * 广播模式消息消费进度存储在消费者本地
  * Local storage implementation
  */
 public class LocalFileOffsetStore implements OffsetStore {
+    // 消息消费进度存储目录，可以通过－Drocketmq.client.localOffsetStoreDir 指定。如果未指定，则默认为用户主目录 rocketmq_offsets
     public final static String LOCAL_OFFSET_STORE_DIR = System.getProperty(
         "rocketmq.client.localOffsetStoreDir",
         System.getProperty("user.home") + File.separator + ".rocketmq_offsets");
     private final static InternalLogger log = ClientLogger.getLog();
+    // 消息客户端
     private final MQClientInstance mQClientFactory;
+    // 消息消费组
     private final String groupName;
+    // 消息进度存储文件 LOCAL_OFFSET_STORE_DIR/.rocketmq_offsets/{mQClientFactory.getClientId()}/groupName/offsets.json
     private final String storePath;
+    // 消息消费进度（内存）
     private ConcurrentMap<MessageQueue, AtomicLong> offsetTable =
         new ConcurrentHashMap<MessageQueue, AtomicLong>();
 
@@ -129,6 +146,11 @@ public class LocalFileOffsetStore implements OffsetStore {
         return -1;
     }
 
+    /**
+     * 持久化消息进度，就是将 ConcurrentMap<MessageQueue, AtomicLong> offsetTable 序列化到磁盘文件中。
+     * 在 MQClientInstance 中会启动1个定时任务，默认每 5s 持久化一次，可通过 persistConsumerOffsetInterval 设置
+     * @param mqs 消息消费队列集合
+     */
     @Override
     public void persistAll(Set<MessageQueue> mqs) {
         if (null == mqs || mqs.isEmpty())
@@ -184,6 +206,7 @@ public class LocalFileOffsetStore implements OffsetStore {
     private OffsetSerializeWrapper readLocalOffset() throws MQClientException {
         String content = null;
         try {
+            // 首先从 storePath 中尝试加载，如果从该文件读取到内容为空，尝试从 storePath ＋ ".bak" 中尝试加载，如果还是未找到，则返回 null
             content = MixAll.file2String(this.storePath);
         } catch (IOException e) {
             log.warn("Load local offset store file exception", e);
