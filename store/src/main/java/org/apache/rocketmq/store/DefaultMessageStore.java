@@ -303,6 +303,7 @@ public class DefaultMessageStore implements MessageStore {
 
         if (!messageStoreConfig.isEnableDLegerCommitLog()) {
             this.haService.start();
+            // 启动定时消息线程池
             this.handleScheduleMessageService(messageStoreConfig.getBrokerRole());
         }
 

@@ -1177,6 +1177,7 @@ public class BrokerController {
 
         //handle the scheduled service
         try {
+            // 启动定时消息线程池
             this.messageStore.handleScheduleMessageService(BrokerRole.SLAVE);
         } catch (Throwable t) {
             log.error("[MONITOR] handleScheduleMessageService failed when changing to slave", t);
@@ -1213,6 +1214,7 @@ public class BrokerController {
 
         //handle the scheduled service
         try {
+            // 启动定时消息线程池
             this.messageStore.handleScheduleMessageService(role);
         } catch (Throwable t) {
             log.error("[MONITOR] handleScheduleMessageService failed when changing to master", t);
