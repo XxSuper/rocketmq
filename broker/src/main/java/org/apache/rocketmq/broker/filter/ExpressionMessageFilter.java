@@ -59,15 +59,19 @@ public class ExpressionMessageFilter implements MessageFilter {
 
     @Override
     public boolean isMatchedByConsumeQueue(Long tagsCode, ConsumeQueueExt.CqExtUnit cqExtUnit) {
+        // 如果订阅消息为空，返回 true，不过滤
         if (null == subscriptionData) {
             return true;
         }
 
+        // 如果是类过滤模式，返回 true
         if (subscriptionData.isClassFilterMode()) {
             return true;
         }
 
         // by tags code.
+        // 基于 TAG 模式，根据 ConsumeQueue 进行消息过滤时只对比 tag 的 hashcode，所以基于 TAG 模式消息过滤，还需要在消息消费端对消息 tag 进行精确匹配
+        // 如果是 TAG 过滤模式，并且消息的 tagsCode 为空或 tagsCode 小于 0，返回 true，说明消息在发送时没有设置 tag。
         if (ExpressionType.isTagType(subscriptionData.getExpressionType())) {
 
             if (tagsCode == null) {
@@ -78,6 +82,7 @@ public class ExpressionMessageFilter implements MessageFilter {
                 return true;
             }
 
+            // 如果订阅消息的 TAG 是 hashcodes 集合中包含消息的 tagsCode，返回 true
             return subscriptionData.getCodeSet().contains(tagsCode.intValue());
         } else {
             // no expression or no bloom
@@ -116,18 +121,22 @@ public class ExpressionMessageFilter implements MessageFilter {
 
     @Override
     public boolean isMatchedByCommitLog(ByteBuffer msgBuffer, Map<String, String> properties) {
+        // 如果订阅信息为空，返回 true
         if (subscriptionData == null) {
             return true;
         }
 
+        // 如果是类过滤模式，返回 true
         if (subscriptionData.isClassFilterMode()) {
             return true;
         }
 
+        // 如果是 TAG 模式，返回 true
         if (ExpressionType.isTagType(subscriptionData.getExpressionType())) {
             return true;
         }
 
+        // 该方法主要是为表达式模式 SQL92 服务的，根据消息属性实现类似于数据库 SQL where 条件过滤方式。
         ConsumerFilterData realFilterData = this.consumerFilterData;
         Map<String, String> tempProperties = properties;
 

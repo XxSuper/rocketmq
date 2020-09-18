@@ -79,6 +79,10 @@ import org.apache.rocketmq.remoting.RPCHook;
 import org.apache.rocketmq.remoting.common.RemotingHelper;
 import org.apache.rocketmq.remoting.exception.RemotingException;
 
+/**
+ * 消息发送者在消息发送时如果设置了消息的 tags 属性，存储在消息属性中，先存储在 CommitLog文件中，然后转发到消息消费队列，消息消费队列会用 8 个字节存储消息 tag 的 hashcode，之所以不直接存储 tag 字符串，是因为将 conumeQueue 设计为定长结构
+ * 加快消息消费的加载性能。在 Broker 端拉取消息时，遍历 ConsumeQueue， 只对比消息 tag 的 hashcode。如果匹配则返回，否则忽略该消息。Consume 在收到消息后，同样需要先对消息进行过滤，只是此时比较的是消息 tag 的值而不再是 hashcode
+ */
 public class DefaultMQPushConsumerImpl implements MQConsumerInner {
     /**
      * Delay some time when exception occur
@@ -457,7 +461,9 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
             }
         }
 
+        // 消息过滤表达式
         String subExpression = null;
+        // 是否是类过滤模式
         boolean classFilter = false;
         SubscriptionData sd = this.rebalanceImpl.getSubscriptionInner().get(pullRequest.getMessageQueue().getTopic());
         if (sd != null) {
@@ -468,10 +474,11 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
             classFilter = sd.isClassFilterMode();
         }
 
+        // 根据订阅消息构建消息拉取标记，设置 subExpression、classFilter 等与消息过滤相关
         int sysFlag = PullSysFlag.buildSysFlag(
             commitOffsetEnable, // commitOffset
             true, // suspend
-            subExpression != null, // subsc iption
+            subExpression != null, // subscription
             classFilter // class filter
         );
         try {
@@ -959,6 +966,12 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
         return this.rebalanceImpl.getSubscriptionInner();
     }
 
+    /**
+     * 消费者订阅消息主题与消息过滤表达式。构建订阅信息并加入到 RebalanceImpl 中，以便 Rebalancelmpl 进行消息队列负载
+     * @param topic
+     * @param subExpression
+     * @throws MQClientException
+     */
     public void subscribe(String topic, String subExpression) throws MQClientException {
         try {
             SubscriptionData subscriptionData = FilterAPI.buildSubscriptionData(this.defaultMQPushConsumer.getConsumerGroup(),

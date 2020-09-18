@@ -84,6 +84,11 @@ public class PullMessageService extends ServiceThread {
         return scheduledExecutorService;
     }
 
+    /**
+     * 消息拉取线程 PullMessageService 默认使用异步方式从服务器拉取消息，消息消费端会通过 PullAPIWrapper 从响应结果解析出拉取到的消息。如果消息
+     * 过滤模式为 TAG 模式，并且订阅 TAG 集合不为空，则对消息的 tag 进行判断，如果集合中包含消息的 TAG 则返回给消费者消费，否则跳过
+     * @param pullRequest
+     */
     private void pullMessage(final PullRequest pullRequest) {
         // 根据消费组名，从 MQClientInstance 中获取消费者内部实现 MQConsumerInner
         final MQConsumerInner consumer = this.mQClientFactory.selectConsumer(pullRequest.getConsumerGroup());

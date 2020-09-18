@@ -20,13 +20,13 @@ package org.apache.rocketmq.common.sysflag;
  * 消息拉取系统标记
  */
 public class PullSysFlag {
-    // 表示从内存中读取的消费进度大于 0，则设置该标记位。
+    // 表示从内存中读取的消费进度大于 0，则设置该标记位. 0x1 十进制 1
     private final static int FLAG_COMMIT_OFFSET = 0x1;
-    // 表示消息拉取时支持挂起
+    // 表示消息拉取时支持挂起. 0x1 << 1 <--> 1 * 2
     private final static int FLAG_SUSPEND = 0x1 << 1;
-    // 消息过滤机制为表达式，则设置该标记位
+    // 消息过滤机制为表达式，则设置该标记位. 0x1 << 1 <--> 1 * 4
     private final static int FLAG_SUBSCRIPTION = 0x1 << 2;
-    // 消息过滤机制为类过滤模式
+    // 消息过滤机制为类过滤模式. 0x1 << 1 <--> 1 * 8
     private final static int FLAG_CLASS_FILTER = 0x1 << 3;
 
     public static int buildSysFlag(final boolean commitOffset, final boolean suspend,
