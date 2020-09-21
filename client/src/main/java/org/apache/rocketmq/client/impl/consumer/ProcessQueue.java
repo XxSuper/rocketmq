@@ -57,7 +57,7 @@ public class ProcessQueue {
     /**
      * A subset of msgTreeMap, will only be used when orderly consume
      */
-    private final TreeMap<Long, MessageExt> consumingMsgOrderlyTreeMap = new TreeMap<Long, MessageExt>();
+    private final TreeMap<Long, MessageExt>  consumingMsgOrderlyTreeMap = new TreeMap<Long, MessageExt>();
     private final AtomicLong tryUnlockTimes = new AtomicLong(0);
     // 当前 ProcessQueue 中包含的最大队列偏移量
     private volatile long queueOffsetMax = 0L;
@@ -293,6 +293,8 @@ public class ProcessQueue {
     }
 
     /**
+     * 提交，就是将该批消息从 ProcessQueue 中移除，维护 msgCount (消息处理队列中消息的个数)，并获取消息消费的偏移量 offset，然后将该批消息从 consumingMsgOrderlyTreeMap
+     * 中移除并返回待保存的消息消费进度(offset + 1)，从中可以看出 offset 表示消息消费队列的逻辑偏移量，类似于数组的下标，代表第 n 个 ConsumeQueue 条目。
      * 将 consumingMsgOrderlyTreeMap 中的消息清除，表示成功处理该批消息
      * @return
      */
@@ -320,7 +322,7 @@ public class ProcessQueue {
     }
 
     /**
-     * 重新消费该批消息
+     * 消息消费重试，先将该批消息重新放入到 ProcessQueue 的 msgTreeMap，然后清除 consumingMsgOrderlyTreeMap
      * @param msgs
      */
     public void makeMessageToCosumeAgain(List<MessageExt> msgs) {

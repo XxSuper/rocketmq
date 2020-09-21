@@ -28,6 +28,8 @@ import org.apache.rocketmq.logging.InternalLogger;
 import org.apache.rocketmq.common.utils.ThreadUtils;
 
 /**
+ * RocketMQ 消息拉取由 PullMessageService 线程负责，根据消息拉取任务循环拉取消息
+ *
  * 消息拉取服务线程，PullMessageService 继承 ServiceThread，是服务线程，通过 run() 方法启动。
  * PullMessageService 只有在拿到 pullRequest 对象时才会执行拉取任务
  *

@@ -294,8 +294,9 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
                 return;
             }
         } else {
-            // ProcessQueue 是否被锁
+            // ProcessQueue 是否被锁，如果消息处理队列未被锁定，则延迟 3s 后再将 PullRequest 对象放入到拉取任务中
             if (processQueue.isLocked()) {
+                // 如果该处理队列是第一次拉取，则首先计算拉取偏移量，然后向消息服务端拉取消息
                 if (!pullRequest.isLockedFirst()) {
                     final long offset = this.rebalanceImpl.computePullFromWhere(pullRequest.getMessageQueue());
                     boolean brokerBusy = offset < pullRequest.getNextOffset();
@@ -1247,6 +1248,11 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
         return queueTimeSpan;
     }
 
+    /**
+     * 遍历消息集合，找出属性为 RETRY_TOPIC 重投的消息， 设置该消息的 topic
+     * @param msgs
+     * @param consumerGroup
+     */
     public void resetRetryAndNamespace(final List<MessageExt> msgs, String consumerGroup) {
         final String groupTopic = MixAll.getRetryTopic(consumerGroup);
         for (MessageExt msg : msgs) {
