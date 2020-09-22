@@ -35,6 +35,15 @@ import org.apache.rocketmq.logging.InternalLogger;
 import org.apache.rocketmq.logging.InternalLoggerFactory;
 import org.apache.rocketmq.remoting.common.RemotingUtil;
 
+/**
+ * RocketMQ 提供了基于表达式与基于类模式两种过滤模式，基于类模式过滤是指在 Broker 端运行一个或多个消息过滤服务器(FilterServer), RocketMQ 允许消息消费者自定义消息过滤实现类
+ * 并将其代码上传到 FilterServer 上，消息消费者向 FilterServer 拉取消息，FilterServer 将消息消费者的拉取命令转发到 Broker ，然后对返回的消息执行消息过滤逻辑，最终将消息返
+ * 回给消费端，其工作原理：
+ * 1、Broker 进程所在的服务器会启动多个 FilterServer 进程
+ * 2、消费者在订阅消息主题时会上传一个自定义的消息过滤实现类，FilterServer 加载并实例化
+ * 3、消息消费者 (Consume) 向 FilterServer 发送消息拉取请求，FilterServer 接收到消息消费者消息拉取请求后，FilterServer 将消息拉取请求转发给 Broker, Broker 返回消息后在
+ * FilterServer 端执行消息过滤逻辑，然后返回符合订阅信息的消息给消息消费者进行消费
+ */
 public class FilterServerManager {
 
     public static final long FILTER_SERVER_MAX_IDLE_TIME_MILLS = 30000;
