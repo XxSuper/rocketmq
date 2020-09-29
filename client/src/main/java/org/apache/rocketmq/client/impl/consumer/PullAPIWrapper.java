@@ -54,6 +54,9 @@ public class PullAPIWrapper {
     private final MQClientInstance mQClientFactory;
     private final String consumerGroup;
     private final boolean unitMode;
+
+    // 消息消费拉取线程 PullMessageService 根据 PullRequest 请求从主服务器拉取消息后会返回下一次建议拉取的 brokerId，消息消费者线程在收到消息后，
+    // 会根据主服务器的建议拉取 brokerId 来更新 pullFromWhichNodeTable
     private ConcurrentMap<MessageQueue, AtomicLong/* brokerId */> pullFromWhichNodeTable =
         new ConcurrentHashMap<MessageQueue, AtomicLong>(32);
     private volatile boolean connectBrokerByUser = false;
@@ -114,6 +117,11 @@ public class PullAPIWrapper {
         return pullResult;
     }
 
+    /**
+     * 更新从哪个节点进行 Pull 的缓存区
+     * @param mq
+     * @param brokerId
+     */
     public void updatePullFromWhichNode(final MessageQueue mq, final long brokerId) {
         AtomicLong suggest = this.pullFromWhichNodeTable.get(mq);
         if (null == suggest) {
@@ -233,16 +241,22 @@ public class PullAPIWrapper {
         throw new MQClientException("The broker[" + mq.getBrokerName() + "] not exist", null);
     }
 
+    /**
+     * 根据消息消费队列获取 brokerId
+     * @param mq
+     * @return
+     */
     public long recalculatePullFromWhichNode(final MessageQueue mq) {
         if (this.isConnectBrokerByUser()) {
             return this.defaultBrokerId;
         }
-
+        // 从 ConcurrentMap<MessageQueue, AtomicLong/* brokerId */> pullFromWhichNodeTable 缓存表中获取该消息消费队列的 brokerId
         AtomicLong suggest = this.pullFromWhichNodeTable.get(mq);
         if (suggest != null) {
+            // 如果找到，则返回
             return suggest.get();
         }
-
+        // 否则返回 brokerName 的主节点
         return MixAll.MASTER_ID;
     }
 

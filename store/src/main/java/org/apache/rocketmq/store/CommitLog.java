@@ -785,15 +785,32 @@ public class CommitLog {
         }
     }
 
+    /**
+     * 如果 Master Broker 的角色是 SYNC_MASTER ，那么消息等待从 Master 同步到 Slave 的方式是同步传输的方式。除此之外，进入同步方式还得满足另外两个条件：
+     * 1、消息体的 PROPERTY_WAIT_STORE_MSG_OK 属性值为 true ，即这条消息允许等待
+     * 2、Slave 相比 Master 落下的同步进度不能超过 256MB
+     * @param result
+     * @param putMessageResult
+     * @param messageExt
+     */
     public void handleHA(AppendMessageResult result, PutMessageResult putMessageResult, MessageExt messageExt) {
+        // 如果 Master Broker 的角色是 SYNC_MASTER，那么消息等待从 Master 同步到 Slave 的方式是同步传输的方式
         if (BrokerRole.SYNC_MASTER == this.defaultMessageStore.getMessageStoreConfig().getBrokerRole()) {
             HAService service = this.defaultMessageStore.getHaService();
+            // 消息是否允许等待同步
             if (messageExt.isWaitStoreMsgOK()) {
                 // Determine whether to wait
+                // slave 是否没有落下 Master 太多
                 if (service.isSlaveOK(result.getWroteOffset() + result.getWroteBytes())) {
+                    // 等待同步完成
+                    // 当消息需要等待的时候，便会构建一个 GroupCommitRequest，每个请求在其内部都维护了一个 CountDownLatch，然后通过调用 await(timeout) 方法来等待
+                    // 消息同步到 Slave 之后，或者超时之后自动返回
                     GroupCommitRequest request = new GroupCommitRequest(result.getWroteOffset() + result.getWroteBytes());
+                    // GroupCommitRequest 放入请求，唤醒  GroupTransferService#run#doWaitTransfer
                     service.putRequest(request);
+                    // 提前唤醒 WriteSocketService#run -> HAConnection#allWaitForRunning
                     service.getWaitNotifyObject().wakeupAll();
+                    // GroupCommitRequest#waitForFlush 等待 GroupTransferService#doWaitTransfer 唤醒
                     boolean flushOK =
                         request.waitForFlush(this.defaultMessageStore.getMessageStoreConfig().getSyncFlushTimeout());
                     if (!flushOK) {
@@ -1218,6 +1235,7 @@ public class CommitLog {
         }
 
         /**
+         * 被唤醒
          * GroupCommitService 线程处理 GroupCommitRequest 对象后将调用 wakeupCustomer 方法将消费发送线程唤醒，并将刷盘告知 GroupCommitRequest
          * @param flushOK
          */

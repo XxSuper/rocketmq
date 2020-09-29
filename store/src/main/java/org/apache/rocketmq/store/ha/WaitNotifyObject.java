@@ -22,6 +22,9 @@ import org.apache.rocketmq.logging.InternalLoggerFactory;
 
 import java.util.HashMap;
 
+/**
+ * 通知主从复制的实现
+ */
 public class WaitNotifyObject {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.STORE_LOGGER_NAME);
 

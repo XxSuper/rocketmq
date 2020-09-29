@@ -275,6 +275,8 @@ public class PullMessageProcessor implements NettyRequestProcessor {
             responseHeader.setMaxOffset(getMessageResult.getMaxOffset());
 
             // 根据主从同步延迟，如果从节点数据包含下一次拉取的偏移量，设置下一次拉取任务的 brokerId
+            // 如果主服务器繁忙则建议下一次从从服务器拉取消息，设置 suggestWhichBrokerId 为配置文件中 whichBrokerWhenConsumeSlowly 属性，默认为 1.
+            // 如果一个 Master 拥有多台 Slave 服务器，参与消息拉取负载的从服务器只会是其中一个
             if (getMessageResult.isSuggestPullingFromSlave()) {
                 responseHeader.setSuggestWhichBrokerId(subscriptionGroupConfig.getWhichBrokerWhenConsumeSlowly());
             } else {
