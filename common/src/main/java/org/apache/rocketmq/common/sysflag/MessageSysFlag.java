@@ -17,6 +17,7 @@
 package org.apache.rocketmq.common.sysflag;
 
 public class MessageSysFlag {
+    // 0x1 表示为二进制就是 0001
     public final static int COMPRESSED_FLAG = 0x1;
     public final static int MULTI_TAGS_FLAG = 0x1 << 1;
     public final static int TRANSACTION_NOT_TYPE = 0;

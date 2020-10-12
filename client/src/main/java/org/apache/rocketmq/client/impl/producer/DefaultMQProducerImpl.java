@@ -758,6 +758,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
                 }
 
                 // 如果是事务 Prepared 消息，设置消息的系统标记为 MessageSysFlag.TRANSACTION_PREPARED_TYPE
+                // 在消息发送之前，如果消息为 prepare 类型，则设置消息标准为 prepare 消息类型，方便消息服务器正确识别事务类型的消息
                 final String tranMsg = msg.getProperty(MessageConst.PROPERTY_TRANSACTION_PREPARED);
                 if (tranMsg != null && Boolean.parseBoolean(tranMsg)) {
                     sysFlag |= MessageSysFlag.TRANSACTION_PREPARED_TYPE;
@@ -1243,6 +1244,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
     public TransactionSendResult sendMessageInTransaction(final Message msg,
         final LocalTransactionExecuter localTransactionExecuter, final Object arg)
         throws MQClientException {
+        // 获取事务监听器
         TransactionListener transactionListener = getCheckListener();
         if (null == localTransactionExecuter && null == transactionListener) {
             throw new MQClientException("tranExecutor is null", null);
@@ -1255,10 +1257,12 @@ public class DefaultMQProducerImpl implements MQProducerInner {
 
         Validators.checkMessage(msg, this.defaultMQProducer);
 
+        // 首先为消息添加属性，TRAN_MSG、PGROUP，分别表示消息为 prepare 消息、消息所属消息生产者组，设置消息生产者组的目的是在查询事务消息本地事务状态时，从该生产者组中随机选择一个消息生产者即可
         SendResult sendResult = null;
         MessageAccessor.putProperty(msg, MessageConst.PROPERTY_TRANSACTION_PREPARED, "true");
         MessageAccessor.putProperty(msg, MessageConst.PROPERTY_PRODUCER_GROUP, this.defaultMQProducer.getProducerGroup());
         try {
+            // 然后通过同步调用方式向 RocketMQ 发送消息
             sendResult = this.send(msg);
         } catch (Exception e) {
             throw new MQClientException("send message Exception", e);
@@ -1266,8 +1270,11 @@ public class DefaultMQProducerImpl implements MQProducerInner {
 
         LocalTransactionState localTransactionState = LocalTransactionState.UNKNOW;
         Throwable localException = null;
+        // 根据消息发送结果执行相应的操作
         switch (sendResult.getSendStatus()) {
             case SEND_OK: {
+                // 如果消息发送成功，则执行 TransactionListener#executeLocalTransaction() 方法，该方法的职责是记录事务消息的本地事务状态，例如可以通过将消息唯一 ID 存储在数据中，并且该方法与事务代码处于同一个事务中
+                // 与业务事务要么一起成功，要么一起失败这里是事务消息设计的关键理念之一，为后续的事务状态回查提供唯一依据
                 try {
                     if (sendResult.getTransactionId() != null) {
                         msg.putUserProperty("__transactionId__", sendResult.getTransactionId());
@@ -1300,6 +1307,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
             case FLUSH_DISK_TIMEOUT:
             case FLUSH_SLAVE_TIMEOUT:
             case SLAVE_NOT_AVAILABLE:
+                // 如果消息发送失败，则设置本次事务状态为 LocalTransactionState.ROLLBACK_MESSAGE
                 localTransactionState = LocalTransactionState.ROLLBACK_MESSAGE;
                 break;
             default:
@@ -1307,6 +1315,9 @@ public class DefaultMQProducerImpl implements MQProducerInner {
         }
 
         try {
+            // 结束事务。根据第二步返回的事务状态执行提交、回滚或暂时不处理事务
+            // 由于 this.endTransaction() 的执行，其业务事务并没有提交，故在使用事务消息 TransactionListener＃execute 方法除了记录事务消息状态后，应该返回 LocalTransaction.UNKNOW，事务消息的提交与回滚通过下面提到的事务消息状态回查时
+            // 再决定是否提交或回滚
             this.endTransaction(sendResult, localTransactionState, localException);
         } catch (Exception e) {
             log.warn("local transaction execute " + localTransactionState + ", but end broker transaction failed", e);
@@ -1340,6 +1351,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
         } else {
             id = MessageDecoder.decodeMessageId(sendResult.getMsgId());
         }
+        // 根据消息所属的消息队列获取 Broker 的 IP 与端口信息，然后发送结束事务命令。其关键就是根据本地执行事务的状态分别发送提交、回滚或 "不作为" 的命令。
         String transactionId = sendResult.getTransactionId();
         final String brokerAddr = this.mQClientFactory.findBrokerAddressInPublish(sendResult.getMessageQueue().getBrokerName());
         EndTransactionRequestHeader requestHeader = new EndTransactionRequestHeader();
@@ -1363,6 +1375,7 @@ public class DefaultMQProducerImpl implements MQProducerInner {
         requestHeader.setTranStateTableOffset(sendResult.getQueueOffset());
         requestHeader.setMsgId(sendResult.getMsgId());
         String remark = localException != null ? ("executeLocalTransactionBranch exception: " + localException.toString()) : null;
+        // Broker 服务端的结束事务处理器为：EndTransactionProcessor
         this.mQClientFactory.getMQClientAPIImpl().endTransactionOneway(brokerAddr, requestHeader, remark,
             this.defaultMQProducer.getSendMsgTimeout());
     }

@@ -68,6 +68,9 @@ public class ClientRemotingProcessor implements NettyRequestProcessor {
         RemotingCommand request) throws RemotingCommandException {
         switch (request.getCode()) {
             case RequestCode.CHECK_TRANSACTION_STATE:
+                // 事务回查命令的最终处理者为 ClientRemotingProcessor#processRequest 方法，最终将任务提交到 TransactionMQProducer 线程池中执行，最终调用应用程序实现的
+                // TransactionListener#checkLocalTransaction 方法，返回事务状态。如果事务状态为 LocalTransactionState#COMMIT_MESSAGE 则向消息服务器发送提交事务消息命令；如果
+                // 事务状态为 LocalTransactionState#ROLLBACK_MESSAGE，则向 Broker 服务器发送回滚事务操作；如果事务状态为 UNOWN ，则服务端会忽略此次提交
                 return this.checkTransactionState(ctx, request);
             case RequestCode.NOTIFY_CONSUMER_IDS_CHANGED:
                 return this.notifyConsumerIdsChanged(ctx, request);

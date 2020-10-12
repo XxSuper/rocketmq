@@ -59,6 +59,8 @@ public abstract class AbstractTransactionalMessageCheckListener {
     }
 
     public void sendCheckMessage(MessageExt msgExt) throws Exception {
+        // 首先构建事务状态回查请求消息，核心参数包含消息 offsetId、消息 ID（索引）、消息事务 ID、事务消息队列中的偏移量、消息主题、消息队列，然后根据消息的生产者组，从
+        // 中随机选择一个消息发送者。最后向消息发送者发送事务回查命令
         CheckTransactionStateRequestHeader checkTransactionStateRequestHeader = new CheckTransactionStateRequestHeader();
         checkTransactionStateRequestHeader.setCommitLogOffset(msgExt.getCommitLogOffset());
         checkTransactionStateRequestHeader.setOffsetMsgId(msgExt.getMsgId());
