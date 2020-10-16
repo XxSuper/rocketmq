@@ -897,6 +897,9 @@ public class BrokerController {
         }
 
         // Broker 启动时向集群中所有的 NameServ 发送心跳语句，每隔 10s 向集群中所有 NameServer 发送心跳包
+        // RocketMQ 路由注册是通过 Broker 与 NameServer 的心跳功能实现的。Broker 启动时向集群中的所有的 NameServer 发送心跳语句，每隔 30s 向集群中所有 NameServer 发送心
+        // 跳包，NameServer 收到 Broker 心跳包时会更新 brokerLiveTable 缓存中 BrokerLiveInfo 的 lastUpdateTimestamp，然后 NameServer 每隔 10s 扫描 brokerLiveTable，
+        // 如果连续 120s 没有收到心跳包，NameServer 将移除该 Broker 的路由信息同时关闭 Socket 连接
         this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
 
             @Override
@@ -939,9 +942,17 @@ public class BrokerController {
         doRegisterBrokerAll(true, false, topicConfigSerializeWrapper);
     }
 
+    /**
+     * 向每个 NameServer 进行注册
+     * @param checkOrderConfig
+     * @param oneway
+     * @param forceRegister
+     */
     public synchronized void registerBrokerAll(final boolean checkOrderConfig, boolean oneway, boolean forceRegister) {
+        // 将 topicConfigTable 封装到 TopicConfigSerializeWrapper 中
         TopicConfigSerializeWrapper topicConfigWrapper = this.getTopicConfigManager().buildTopicConfigSerializeWrapper();
 
+        // 判断权限如果为不可读或不可写那么就在拼装一下 topicConfigTable 到 TopicConfigSerializeWrapper 中
         if (!PermName.isWriteable(this.getBrokerConfig().getBrokerPermission())
             || !PermName.isReadable(this.getBrokerConfig().getBrokerPermission())) {
             ConcurrentHashMap<String, TopicConfig> topicConfigTable = new ConcurrentHashMap<String, TopicConfig>();
@@ -954,17 +965,26 @@ public class BrokerController {
             topicConfigWrapper.setTopicConfigTable(topicConfigTable);
         }
 
+        // forceRegister 是否强制注册，needRegister 方法是与配置的每个 NameServer 进行通信，判断 topicConfigTable 是否改变了，只要其中一个改变了那么就需要发起注册
         if (forceRegister || needRegister(this.brokerConfig.getBrokerClusterName(),
             this.getBrokerAddr(),
             this.brokerConfig.getBrokerName(),
             this.brokerConfig.getBrokerId(),
             this.brokerConfig.getRegisterBrokerTimeoutMills())) {
+            // 将 broker 的路由信息发送至 NameServer
             doRegisterBrokerAll(checkOrderConfig, oneway, topicConfigWrapper);
         }
     }
 
+    /**
+     * 将 broker 的路由信息发送至 NameServer
+     * @param checkOrderConfig
+     * @param oneway
+     * @param topicConfigWrapper
+     */
     private void doRegisterBrokerAll(boolean checkOrderConfig, boolean oneway,
         TopicConfigSerializeWrapper topicConfigWrapper) {
+        // 发送注册请求到 NameServer
         List<RegisterBrokerResult> registerBrokerResultList = this.brokerOuterAPI.registerBrokerAll(
             this.brokerConfig.getBrokerClusterName(),
             this.getBrokerAddr(),
@@ -993,16 +1013,27 @@ public class BrokerController {
         }
     }
 
+    /**
+     * 判断 broker 集群是否需要注册
+     * @param clusterName
+     * @param brokerAddr
+     * @param brokerName
+     * @param brokerId
+     * @param timeoutMills
+     * @return
+     */
     private boolean needRegister(final String clusterName,
         final String brokerAddr,
         final String brokerName,
         final long brokerId,
         final int timeoutMills) {
-
+        // 将 topicConfigTable 封装到 TopicConfigSerializeWrapper 中
         TopicConfigSerializeWrapper topicConfigWrapper = this.getTopicConfigManager().buildTopicConfigSerializeWrapper();
+        // 判断是否需要注册
         List<Boolean> changeList = brokerOuterAPI.needRegister(clusterName, brokerAddr, brokerName, brokerId, topicConfigWrapper, timeoutMills);
         boolean needRegister = false;
         for (Boolean changed : changeList) {
+            // 只要一个 nameServer 需要更新就全部需要更新
             if (changed) {
                 needRegister = true;
                 break;

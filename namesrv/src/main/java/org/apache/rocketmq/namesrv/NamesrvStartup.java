@@ -106,12 +106,14 @@ public class NamesrvStartup {
         }
 
         if (commandLine.hasOption('p')) {
+            // 打印所有配置属性
             InternalLogger console = InternalLoggerFactory.getLogger(LoggerName.NAMESRV_CONSOLE_NAME);
             MixAll.printObjectProperties(console, namesrvConfig);
             MixAll.printObjectProperties(console, nettyServerConfig);
             System.exit(0);
         }
 
+        // 启动命令中的选项值，填充到 nameServerConfig 对象
         MixAll.properties2Object(ServerUtil.commandLine2Properties(commandLine), namesrvConfig);
 
         if (null == namesrvConfig.getRocketmqHome()) {
@@ -130,7 +132,7 @@ public class NamesrvStartup {
         MixAll.printObjectProperties(log, namesrvConfig);
         MixAll.printObjectProperties(log, nettyServerConfig);
 
-        // 根据启动属性创建 NamesrvController 实例，并初始化该实例 NameServerController 实例为 NameServer 核心控制器
+        // 根据启动属性创建 NamesrvController 实例，并初始化该实例，NameServerController 实例为 NameServer 核心控制器
         final NamesrvController controller = new NamesrvController(namesrvConfig, nettyServerConfig);
 
         // remember all configs to prevent discard

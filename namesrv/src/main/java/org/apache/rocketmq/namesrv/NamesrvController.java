@@ -103,9 +103,14 @@ public class NamesrvController {
         // 注册 DefaultRequestProcessor，所有的客户端请求都会转给这个 Processor 来处理（所有的客户端请求都会转到 DefaultRequestProcessor 来处理）
         this.registerProcessor();
 
-        // 启动定时调度，每10秒钟扫描所有 Broker 从 brokerLiveTable 缓存，检查存活状态，移除处于不激活状态的 Broker
-        // Name Server 会每隔 1Os 扫描 brokerLiveTable 状态表，如果 BrokerLive 的 lastUpdateTimestamp 的时间戳距当前时间超过 120s ，则认为 Broker 失效，移除该 Broker,
-        // 关闭与 Broker 的连接，并同时更新 topicQueueTable brokerAddrTable brokerLiveTable filterServerTable
+        // 启动定时调度，每10秒钟扫描所有 Broker 从 brokerLiveTable 缓存，检查存活状态，移除处于不激活状态的 Broker。
+        // Broker 每隔 30s 向 NameServer 发送一个心跳包，心跳包中包含 BrokerId、Broker 地址、Broker 名称、Broker 所属集群名称、Broker 关联的 FilterServer 列表。但是如果 Broker 宕机，NameServer 无法收到心跳包，
+        // 此时 NameServer 如何来剔除这些失效的 Broker 呢？
+        // NameServer 会每隔 1Os 扫描 brokerLiveTable 状态表，如果 BrokerLive 的 lastUpdateTimestamp 的时间戳距当前时间超过 120s，则认为 Broker 失效，移除该 Broker，
+        // 关闭与 Broker 的连接，并同时更新 topicQueueTable、brokerAddrTable、brokerLiveTable、filterServerTable
+        // RocktMQ 有两个触发点来触发路由删除。
+        // 1) NameServer 定时扫描 brokerLiveTable 检测上次心跳包与当前系统时间的时间差，如果时间戳大于 120s ，则需要移除 Broker 信息
+        // 2) Broker 在正常被关闭的情况下，会执行 unregisterBroker 指令
         this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
 
             @Override

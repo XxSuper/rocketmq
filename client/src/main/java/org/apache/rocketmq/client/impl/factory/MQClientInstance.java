@@ -290,7 +290,7 @@ public class MQClientInstance {
             @Override
             public void run() {
                 try {
-                    // 更新 topic 路由信息
+                    // 更新 topic 路由信息。RocketMQ 路由发现是非实时的，当 Topic 路由出现变化后，NameServer 不主动推送给客户端，而是由客户端定时拉取主题最新的路由。根据主题名称拉取路由信息的命令编码为：GET_ROUTEINTO_BY_TOPIC
                     MQClientInstance.this.updateTopicRouteInfoFromNameServer();
                 } catch (Exception e) {
                     log.error("ScheduledTask updateTopicRouteInfoFromNameServer exception", e);
@@ -346,6 +346,7 @@ public class MQClientInstance {
 
         // Consumer
         {
+            // 提取所有消费者订阅的主题
             Iterator<Entry<String, MQConsumerInner>> it = this.consumerTable.entrySet().iterator();
             while (it.hasNext()) {
                 Entry<String, MQConsumerInner> entry = it.next();
@@ -363,6 +364,7 @@ public class MQClientInstance {
 
         // Producer
         {
+            // 提取所有生产者发送的主题
             Iterator<Entry<String, MQProducerInner>> it = this.producerTable.entrySet().iterator();
             while (it.hasNext()) {
                 Entry<String, MQProducerInner> entry = it.next();
@@ -374,6 +376,7 @@ public class MQClientInstance {
             }
         }
 
+        // /遍历更新所有的主题对应的路由信息
         for (String topic : topicList) {
             this.updateTopicRouteInfoFromNameServer(topic);
         }
@@ -525,6 +528,11 @@ public class MQClientInstance {
         }
     }
 
+    /**
+     * 更新主题路由信息
+     * @param topic
+     * @return
+     */
     public boolean updateTopicRouteInfoFromNameServer(final String topic) {
         return updateTopicRouteInfoFromNameServer(topic, false, null);
     }

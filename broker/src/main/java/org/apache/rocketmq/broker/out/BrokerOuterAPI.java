@@ -148,18 +148,19 @@ public class BrokerOuterAPI {
             final RegisterBrokerRequestHeader requestHeader = new RegisterBrokerRequestHeader();
             // broker 地址
             requestHeader.setBrokerAddr(brokerAddr);
-            // brokerld O:Master 大于0: Slave
+            // brokerId O:Master 大于0: Slave
             requestHeader.setBrokerId(brokerId);
             // broker名称
             requestHeader.setBrokerName(brokerName);
             // 集群名称
             requestHeader.setClusterName(clusterName);
-            // master 地址，初次请求时该值为空， slave 向 Nameserver 注册后返回
+            // master 地址，初次请求时该值为空， slave 向 NameServer 注册后返回
             requestHeader.setHaServerAddr(haServerAddr);
             requestHeader.setCompressed(compressed);
 
             RegisterBrokerBody requestBody = new RegisterBrokerBody();
-            // 主题配置
+            // 主题配置，topicConfigWrapper 内部封装的是 TopicConfigManager 中的 topicConfigTable，内部存储的是 Broker 启动时默认的一些 Topic，MixAll.SELF_TEST_TOPIC、MixAll.DEFAULT_TOPIC（AutoCreateTopicEnable=true）、
+            // MixAll.BENCHMARK_TOPIC、MixAll.OFFSET_MOVED_EVENT、BrokerConfig#brokerClusterName、BrokerConfig#brokerName。Broker 中 Topic 默认存储在 ${RocketHome}/store/confg/topic.json 中
             requestBody.setTopicConfigSerializeWrapper(topicConfigWrapper);
             // 消息过滤服务器列表
             requestBody.setFilterServerList(filterServerList);
@@ -293,8 +294,10 @@ public class BrokerOuterAPI {
         final TopicConfigSerializeWrapper topicConfigWrapper,
         final int timeoutMills) {
         final List<Boolean> changedList = new CopyOnWriteArrayList<>();
+            // 遍历 NameServer 列表，Broker 消息服务器依次向 NameServer 发送心跳包
         List<String> nameServerAddressList = this.remotingClient.getNameServerAddressList();
         if (nameServerAddressList != null && nameServerAddressList.size() > 0) {
+            // 多线程分发执行，一个 NameServer 一个线程
             final CountDownLatch countDownLatch = new CountDownLatch(nameServerAddressList.size());
             for (final String namesrvAddr : nameServerAddressList) {
                 brokerOuterExecutor.execute(new Runnable() {
@@ -302,12 +305,17 @@ public class BrokerOuterAPI {
                     public void run() {
                         try {
                             QueryDataVersionRequestHeader requestHeader = new QueryDataVersionRequestHeader();
+                            // broker 地址
                             requestHeader.setBrokerAddr(brokerAddr);
+                            // brokerId，O:Master；大于 0: Slave
                             requestHeader.setBrokerId(brokerId);
+                            // broker 名称
                             requestHeader.setBrokerName(brokerName);
+                            // 集群名称
                             requestHeader.setClusterName(clusterName);
                             RemotingCommand request = RemotingCommand.createRequestCommand(RequestCode.QUERY_DATA_VERSION, requestHeader);
                             request.setBody(topicConfigWrapper.getDataVersion().encode());
+                            // broker 向 NameServer 同步查询数据版本
                             RemotingCommand response = remotingClient.invokeSync(namesrvAddr, request, timeoutMills);
                             DataVersion nameServerDataVersion = null;
                             Boolean changed = false;
@@ -335,6 +343,7 @@ public class BrokerOuterAPI {
                             changedList.add(Boolean.TRUE);
                             log.error("Query data version from name server {}  Exception, {}", namesrvAddr, e);
                         } finally {
+                            // 异常情况下解除线程阻塞
                             countDownLatch.countDown();
                         }
                     }
@@ -342,6 +351,7 @@ public class BrokerOuterAPI {
 
             }
             try {
+                // 等到超时解除线程阻塞
                 countDownLatch.await(timeoutMills, TimeUnit.MILLISECONDS);
             } catch (InterruptedException e) {
                 log.error("query dataversion from nameserver countDownLatch await Exception", e);
