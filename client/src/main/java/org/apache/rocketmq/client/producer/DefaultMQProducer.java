@@ -924,9 +924,27 @@ public class DefaultMQProducer extends ClientConfig implements MQProducer {
         return this.defaultMQProducerImpl.queryMessageByUniqKey(withNamespace(topic), msgId);
     }
 
+    /**
+     * 消息批量发迭。批量消息发送是将同一主题的多条消息一起打包发送到消息服务端，减少网络调用次数，提高网络传输效率。当然，并不是在同一批次中发送的消息数量越多性能就越好，其判断依据是单条消息的长度，如果单条消息内容比较长，则打包多条消息发送会影响其他
+     * 线程发送消息的响应时间，并且单次消息发送总长度不能超过 DefaultMQProducer#maxMessageSize。批量消息发送要解决的是如何将这些消息编码以便服务端能够正确解码出每条消息的消息内容.
+     * 单条消息发送时，消息体的内容将保存在 body 中。批量消息发送，需要将多条消息体的内容存储在 body 中。RocketMQ 采取的方式是，对单条消息内容使用固定格式进行存储。
+     * -----------------------------------------------------------------------------------------------------------------------------------
+     *              |             |                 |              |                  |               |                |                  |
+     * 总长度(4字节)  | 魔数(4字节)  | bode CRC(4字节)  |  Flag(4字节)  |  body长度(4字节)  |  消息体(N字节)  |  属性长度(2字节)  |  扩展属性(N字节)   |
+     *              |             |                 |              |                  |               |                 |                 |
+     * -----------------------------------------------------------------------------------------------------------------------------------
+     * @param msgs
+     * @return
+     * @throws MQClientException
+     * @throws RemotingException
+     * @throws MQBrokerException
+     * @throws InterruptedException
+     */
     @Override
     public SendResult send(
         Collection<Message> msgs) throws MQClientException, RemotingException, MQBrokerException, InterruptedException {
+        // 在消息发送端，调用 batch 方法，将一批消息封装成 MessageBatch 对象。MessageBatch 继承自 Message 对象，MessagBatch 内部持有 List<Message> messages。这样的话，批量消息与单条消息发送的处理流程完全一样。
+        // MessagBatch 只需要将该集合中的每条消息的消息体 body 聚合成一个 byte[] 数组，在消息服务端能够从该 byte[] 数组中正确解析出消息即可
         return this.defaultMQProducerImpl.send(batch(msgs));
     }
 
