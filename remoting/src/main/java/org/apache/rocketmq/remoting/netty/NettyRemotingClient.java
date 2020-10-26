@@ -160,12 +160,17 @@ public class NettyRemotingClient extends NettyRemotingAbstract implements Remoti
                     return new Thread(r, "NettyClientWorkerThread_" + this.threadIndex.incrementAndGet());
                 }
             });
-
+        // 设置 bootstrap
         Bootstrap handler = this.bootstrap.group(this.eventLoopGroupWorker).channel(NioSocketChannel.class)
+            // 关闭 Nagle 算法，避免产生时延
             .option(ChannelOption.TCP_NODELAY, true)
+            // 不启用 tcp 的心跳机制
             .option(ChannelOption.SO_KEEPALIVE, false)
+            // 3秒连接超时
             .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, nettyClientConfig.getConnectTimeoutMillis())
+            // 发送缓冲区64k
             .option(ChannelOption.SO_SNDBUF, nettyClientConfig.getClientSocketSndBufSize())
+            // 接收缓冲区64k
             .option(ChannelOption.SO_RCVBUF, nettyClientConfig.getClientSocketRcvBufSize())
             .handler(new ChannelInitializer<SocketChannel>() {
                 @Override
@@ -181,15 +186,18 @@ public class NettyRemotingClient extends NettyRemotingAbstract implements Remoti
                     }
                     pipeline.addLast(
                         defaultEventExecutorGroup,
+                        // 消息编码器
                         new NettyEncoder(),
+                        // 消息解码器
                         new NettyDecoder(),
+                        // 心跳检测
                         new IdleStateHandler(0, 0, nettyClientConfig.getClientChannelMaxIdleTimeSeconds()),
                         new NettyConnectManageHandler(),
                         new NettyClientHandler());
                 }
             });
 
-        // 定时扫描请求响应包
+        // 定时扫描请求响应包（每秒处理丢弃超时的请求）
         this.timer.scheduleAtFixedRate(new TimerTask() {
             @Override
             public void run() {

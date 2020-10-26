@@ -174,6 +174,7 @@ public class MQClientAPIImpl {
         System.setProperty(RemotingCommand.REMOTING_VERSION_KEY, Integer.toString(MQVersion.CURRENT_VERSION));
     }
 
+    // 实现类为 NettyRemotingClient
     private final RemotingClient remotingClient;
     private final TopAddressing topAddressing;
     private final ClientRemotingProcessor clientRemotingProcessor;
@@ -184,23 +185,34 @@ public class MQClientAPIImpl {
         final ClientRemotingProcessor clientRemotingProcessor,
         RPCHook rpcHook, final ClientConfig clientConfig) {
         this.clientConfig = clientConfig;
+        // 获取 namesrv 地址信息地址
         topAddressing = new TopAddressing(MixAll.getWSAddr(), clientConfig.getUnitName());
+        // 创建远程通信客户端，创建 remotingClient，并注册请求对应的处理器
         this.remotingClient = new NettyRemotingClient(nettyClientConfig, null);
+        // 远程通信客户端处理器
         this.clientRemotingProcessor = clientRemotingProcessor;
 
         this.remotingClient.registerRPCHook(rpcHook);
+        // 注册远程通信客户端处理器
+        // CHECK_TRANSACTION_STATE 事务回查
         this.remotingClient.registerProcessor(RequestCode.CHECK_TRANSACTION_STATE, this.clientRemotingProcessor, null);
 
+        // NOTIFY_CONSUMER_IDS_CHANGED 通知消费者变化
         this.remotingClient.registerProcessor(RequestCode.NOTIFY_CONSUMER_IDS_CHANGED, this.clientRemotingProcessor, null);
 
+        // 重置消费端 offset
         this.remotingClient.registerProcessor(RequestCode.RESET_CONSUMER_CLIENT_OFFSET, this.clientRemotingProcessor, null);
 
+        // 获取消费端状态
         this.remotingClient.registerProcessor(RequestCode.GET_CONSUMER_STATUS_FROM_CLIENT, this.clientRemotingProcessor, null);
 
+        // 获取消费端运行信息
         this.remotingClient.registerProcessor(RequestCode.GET_CONSUMER_RUNNING_INFO, this.clientRemotingProcessor, null);
 
+        // 消费消息
         this.remotingClient.registerProcessor(RequestCode.CONSUME_MESSAGE_DIRECTLY, this.clientRemotingProcessor, null);
 
+        // 重复消息推送
         this.remotingClient.registerProcessor(RequestCode.PUSH_REPLY_MESSAGE_TO_CLIENT, this.clientRemotingProcessor, null);
     }
 
@@ -235,6 +247,9 @@ public class MQClientAPIImpl {
         this.remotingClient.updateNameServerAddressList(list);
     }
 
+    /**
+     * 启动远程通信服务
+     */
     public void start() {
         this.remotingClient.start();
     }
@@ -498,12 +513,12 @@ public class MQClientAPIImpl {
         // 根据消息发送方式，同步、异步、单向方式进行网络传输
         switch (communicationMode) {
             case ONEWAY:
-                // 单向发送是指消息生产者调用消息发送 API ，无须等待消息服务器返回本次消息发送结果，并且无须提供回调函数，表示消息发送压根就不关心本次消息发送是否成功，其实现原理与异步消息发送相同，只是消息发送客户端在收到响应结果后什么都不做而已，并且没有重试机制
+                // 单向发送是指消息生产者调用消息发送 API 后，无须等待消息服务器返回本次消息发送结果，并且无须提供回调函数，表示消息发送压根就不关心本次消息发送是否成功，其实现原理与异步消息发送相同，只是消息发送客户端在收到响应结果后什么都不做而已，并且没有重试机制
                 this.remotingClient.invokeOneway(addr, request, timeoutMillis);
                 return null;
             case ASYNC:
-                // 消息异步发送是指消息生产者调用发送的 API 后，无须阻塞等待消息服务器返回本次消息发送结果，只需要提 个回调函数，供消息发送客户端在收到响应结果回调 异步方式相比同步方式，消息发送端的发送性能会显著提高，但为了保护消息服务器的负载压力，
-                // RocketMQ 对消息发送的异步消息进行了井发控制，通 参数 clientAsyncSemaphoreValue 来控制，默认为 65535 异步消息发送虽然也可以通过 DefaultMQProducer#retryTimes WhenSendAsyncFailed 属性来控制消息重试次数，但是重试的调用人 是在收到服务端
+                // 消息异步发送是指消息生产者调用发送的 API 后，无须阻塞等待消息服务器返回本次消息发送结果，只需要提供一个回调函数，供消息发送客户端在收到响应结果回调。异步方式相比同步方式，消息发送端的发送性能会显著提高，但为了保护消息服务器的负载压力，
+                // RocketMQ 对消息发送的异步消息进行了并发控制，通过参数 clientAsyncSemaphoreValue 来控制，默认为 65535。异步消息发送虽然也可以通过 DefaultMQProducer#retryTimesWhenSendAsyncFailed 属性来控制消息重试次数，但是重试的调用入口是在收到服务端
                 // 响应包时进行的，如果出现网络异常、网络超时等将不会重试异步发送
                 final AtomicInteger times = new AtomicInteger();
                 long costTimeAsync = System.currentTimeMillis() - beginStartTime;

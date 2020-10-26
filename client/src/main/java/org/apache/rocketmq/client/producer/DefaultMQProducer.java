@@ -64,7 +64,7 @@ public class DefaultMQProducer extends ClientConfig implements MQProducer {
     protected final transient DefaultMQProducerImpl defaultMQProducerImpl;
     private final InternalLogger log = ClientLogger.getLog();
     /**
-     * 生产者所属组，消息服务器在回查事务状态 会随机选择该组中任何一个生产者发起事务回查请求
+     * 生产者所属组，消息服务器在回查事务状态时会随机选择该组中任何一个生产者发起事务回查请求
      *
      * Producer group conceptually aggregates all producer instances of exactly same role, which is particularly
      * important when transactional messages are involved. </p>
@@ -82,13 +82,13 @@ public class DefaultMQProducer extends ClientConfig implements MQProducer {
     private String createTopicKey = MixAll.AUTO_CREATE_TOPIC_KEY_TOPIC;
 
     /**
-     * 默认主题在每一个 Broker 队列数量
+     * 默认主题在每一个 Broker 中的队列数量
      * Number of queues to create per default topic.
      */
     private volatile int defaultTopicQueueNums = 4;
 
     /**
-     * 发送消息默认超时时间， 默认 3s
+     * 发送消息默认超时时间，默认 3s
      * Timeout for sending messages.
      */
     private int sendMsgTimeout = 3000;
@@ -116,13 +116,13 @@ public class DefaultMQProducer extends ClientConfig implements MQProducer {
     private int retryTimesWhenSendAsyncFailed = 2;
 
     /**
-     * 消息重试时选择另外一个 Broker 时，是否不等待存储结果就返回 默认为 false
+     * 消息重试时选择另外一个 Broker 时，是否不等待存储结果就返回，默认为 false
      * Indicate whether to retry another broker on sending failure internally.
      */
     private boolean retryAnotherBrokerWhenNotStoreOK = false;
 
     /**
-     * 允许发送的最大消息长度，默认为 4M ，该值最大值为 2 的 32 次方减 1
+     * 允许发送的最大消息长度，默认为 4M，该值最大值为 2 的 32 次方减 1
      * Maximum allowed message size in bytes.
      */
     private int maxMessageSize = 1024 * 1024 * 4; // 4M
@@ -270,6 +270,7 @@ public class DefaultMQProducer extends ClientConfig implements MQProducer {
     }
 
     /**
+     * 启动生产者实例
      * Start this producer instance. </p>
      *
      * <strong> Much internal initializing procedures are carried out to make this instance prepared, thus, it's a must
@@ -336,6 +337,7 @@ public class DefaultMQProducer extends ClientConfig implements MQProducer {
         Message msg) throws MQClientException, RemotingException, MQBrokerException, InterruptedException {
         Validators.checkMessage(msg, this);
         msg.setTopic(withNamespace(msg.getTopic()));
+        // 默认消息发送以同步方式发送，默认超时时间为 3s
         return this.defaultMQProducerImpl.send(msg);
     }
 
@@ -360,7 +362,7 @@ public class DefaultMQProducer extends ClientConfig implements MQProducer {
     }
 
     /**
-     * 异步发送消息， sendCallback 参数是消息发送成功后的回调方法
+     * 异步发送消息，sendCallback 参数是消息发送成功后的回调方法
      * Send message to broker asynchronously. </p>
      *
      * This method returns immediately. On sending completion, <code>sendCallback</code> will be executed. </p>
@@ -383,7 +385,7 @@ public class DefaultMQProducer extends ClientConfig implements MQProducer {
     }
 
     /**
-     * 异步发送消息 ，如果发送超过 timeout 指定的值，则抛出超时异常
+     * 异步发送消息，如果发送超过 timeout 指定的值，则抛出超时异常
      * Same to {@link #send(Message, SendCallback)} with send timeout specified in addition.
      *
      * @param msg message to send.
@@ -929,7 +931,7 @@ public class DefaultMQProducer extends ClientConfig implements MQProducer {
     }
 
     /**
-     * 批量消息发送
+     * 同步批量消息发送
      * @param msgs
      * @param timeout
      * @return

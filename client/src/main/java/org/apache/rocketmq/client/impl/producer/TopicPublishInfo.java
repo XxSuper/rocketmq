@@ -76,13 +76,13 @@ public class TopicPublishInfo {
      */
     public MessageQueue selectOneMessageQueue(final String lastBrokerName) {
         if (lastBrokerName == null) {
-            // 第一次执行消息队列选择时，lastBrokerName null，此时直接用 sendWhichQueue 自增再获取 messageQueue，与当前路由表中消息队列个数取模，返回该位置 MessageQueue(selectOneMessageQueue（） 方法）
+            // 第一次执行消息队列选择时，lastBrokerName 为 null，此时直接用 sendWhichQueue 自增再获取值，与当前路由表中消息队列个数取模，返回该位置的 MessageQueue(selectOneMessageQueue() 方法）
             return selectOneMessageQueue();
         } else {
-            // 如果消息发送再失败的话，下次进行消息队列选择时规避上次 MesageQueue 所在的 Brokerr ，否则还很有可能再次失败
-            // 该算法在一次消息发送过程中能成功规避故障的 Broker，，但如果 Broker 宕机，由于路由算法中的消息队列 是按 Broker 排序的，
-            // 如果上一次根据路由算法选择的是宕机的 Broker 的第一个队列 ，那么随后的再次选择的是宕机 Broker 的第二个队列，消息发送很有可能会再次失败，再次引发重试，带来不必要的性能损耗，
-            // 首先， NameServer 检测 Broker 是否可用是有延迟的，最短为一次心跳检测间隔（ 1Os ）； 其次， NameServer 检测到 Broker 宕机后不会马上推送消息给消息生产者，而是消息生产者每隔 30s 更新一次路由信息，所以消息生产者最快感知 Broker 最新的路由信息也需要 30s
+            // 如果消息发送再失败的话，下次进行消息队列选择时规避上次 MesageQueue 所在的 Broker，否则还是很有可能再次失败
+            // 该算法在一次消息发送过程中能成功规避故障的 Broker，但如果 Broker 宕机，由于路由算法中的消息队列是按 Broker 排序的，
+            // 如果上一次根据路由算法选择的是宕机的 Broker 的第一个队列，那么随后的再次选择的是宕机 Broker 的第二个队列，消息发送很有可能会再次失败，再次引发重试，带来不必要的性能损耗，
+            // 首先，NameServer 检测 Broker 是否可用是有延迟的，最短为一次心跳检测间隔（ 1Os ）； 其次， NameServer 检测到 Broker 宕机后不会马上推送消息给消息生产者，而是消息生产者每隔 30s 更新一次路由信息，所以消息生产者最快感知 Broker 最新的路由信息也需要 30s
             // 如果能引人一种机制，Broker 宕机期间，如果一次消息发送失败后，可以将该 Broker 暂时排除在消息队列的选择范围中
             int index = this.sendWhichQueue.getAndIncrement();
             for (int i = 0; i < this.messageQueueList.size(); i++) {

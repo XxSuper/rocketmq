@@ -23,7 +23,10 @@ import org.apache.rocketmq.logging.InternalLogger;
 import org.apache.rocketmq.common.message.MessageQueue;
 
 /**
- * 消息失败策略， 延迟实现的门面类
+ * 消息失败策略，延迟实现的门面类
+ * MQFaultStrategy 有两个作用：
+ * 1、用于挑选 MessageQueue
+ * 2、如果开启了故障延迟机制，则在消息发送失败的时候，会生成一个 FaultItem，标记 broker 故障
  */
 public class MQFaultStrategy {
     private final static InternalLogger log = ClientLogger.getLog();
@@ -61,7 +64,7 @@ public class MQFaultStrategy {
     }
 
     public MessageQueue selectOneMessageQueue(final TopicPublishInfo tpInfo, final String lastBrokerName) {
-        // sendLatencyFaultEnable=false ，默认不启用 Broker 故障延迟机制，sendLatencyFaultEnable=true ，启用 Broker 障延迟机制
+        // sendLatencyFaultEnable=false，默认不启用 Broker 故障延迟机制，sendLatencyFaultEnable=true，启用 Broker 障延迟机制
         if (this.sendLatencyFaultEnable) {
             try {
                 // 故障延迟机制，Broker 宕机期间，如果一次消息发送失败后，可以将该 Broker 暂时排除在消息队列的选择范围中
@@ -74,6 +77,7 @@ public class MQFaultStrategy {
                     MessageQueue mq = tpInfo.getMessageQueueList().get(pos);
                     // 验证该消息队列是否可用
                     if (latencyFaultTolerance.isAvailable(mq.getBrokerName())) {
+                        // 1、非失败重试（首次调用） 2、失败重试，如果选择的队列和上次重试的一样。则返回
                         if (null == lastBrokerName || mq.getBrokerName().equals(lastBrokerName))
                             return mq;
                     }
@@ -81,8 +85,11 @@ public class MQFaultStrategy {
 
                 // 尝试从规避的 Broker 中选择一个可用的 Broker ，如果没有找到，将返回 null
                 final String notBestBroker = latencyFaultTolerance.pickOneAtLeast();
+                // 写队列个数
                 int writeQueueNums = tpInfo.getQueueIdByBroker(notBestBroker);
+                // 有可写队列
                 if (writeQueueNums > 0) {
+                    // 往后取一个
                     final MessageQueue mq = tpInfo.selectOneMessageQueue();
                     if (notBestBroker != null) {
                         mq.setBrokerName(notBestBroker);
@@ -90,16 +97,16 @@ public class MQFaultStrategy {
                     }
                     return mq;
                 } else {
-                    // 如果返回的 MessageQueue 可用， 移除 latencyFaultTolerance 关于该 topic 条目，表明该 Broker 故障已经恢复
+                    // 如果返回的 MessageQueue 可用，移除 latencyFaultTolerance 关于该 topic 条目，表明该 Broker 故障已经恢复
                     latencyFaultTolerance.remove(notBestBroker);
                 }
             } catch (Exception e) {
                 log.error("Error occurred when selecting message queue", e);
             }
-
+            // 轮训选择一个消息队列
             return tpInfo.selectOneMessageQueue();
         }
-
+        //获得 lastBrokerName 对应的一个消息队列，不考虑该队列的可用性
         return tpInfo.selectOneMessageQueue(lastBrokerName);
     }
 

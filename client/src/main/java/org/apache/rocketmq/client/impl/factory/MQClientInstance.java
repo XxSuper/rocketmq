@@ -86,7 +86,7 @@ import org.apache.rocketmq.remoting.netty.NettyClientConfig;
 import org.apache.rocketmq.remoting.protocol.RemotingCommand;
 
 /**
- * MQClientInstance 封装了 RocketMQ 网络处理 API ，是消息生产者（ Producer ）、消息消费者（ Consumer ）与 NameServer、Broker 打交道的网络通道
+ * MQClientInstance 封装了 RocketMQ 网络处理 API，是消息生产者（Producer）、消息消费者（Consumer）与 NameServer、Broker 打交道的网络通道
  */
 public class MQClientInstance {
     private final static long LOCK_TIMEOUT_MILLIS = 3000;
@@ -183,7 +183,7 @@ public class MQClientInstance {
             // 顺序消息配置内容为空
             List<QueueData> qds = route.getQueueDatas();
             Collections.sort(qds);
-            // 循环遍历路由信息的 QueueData 信息，，如果队列 没有写权限，则继续遍历下一个 QueueData
+            // 循环遍历路由信息的 QueueData 信息，如果队列 没有写权限，则继续遍历下一个 QueueData
             for (QueueData qd : qds) {
                 if (PermName.isWriteable(qd.getPerm())) {
                     BrokerData brokerData = null;
@@ -205,7 +205,7 @@ public class MQClientInstance {
                         continue;
                     }
 
-                    // 根据写队列个数，根据 topic ＋ 序号创建 MessageQueue ，填充 topicPublishlnfo 的 List<QuueMessage> 完成消息发送的路由查找
+                    // 根据写队列个数，根据 topic ＋ 序号创建 MessageQueue ，填充 topicPublishInfo 的 List<MessageQueue> 完成消息发送的路由查找
                     for (int i = 0; i < qd.getWriteQueueNums(); i++) {
                         MessageQueue mq = new MessageQueue(topic, qd.getBrokerName(), i);
                         info.getMessageQueueList().add(mq);
@@ -222,8 +222,10 @@ public class MQClientInstance {
     public static Set<MessageQueue> topicRouteData2TopicSubscribeInfo(final String topic, final TopicRouteData route) {
         Set<MessageQueue> mqList = new HashSet<MessageQueue>();
         List<QueueData> qds = route.getQueueDatas();
+        // 循环遍历路由信息的 QueueData 信息，如果队列没有读权限，则继续遍历下一个 QueueData
         for (QueueData qd : qds) {
             if (PermName.isReadable(qd.getPerm())) {
+                // 根据读队列个数，根据 topic ＋ 序号创建 MessageQueue
                 for (int i = 0; i < qd.getReadQueueNums(); i++) {
                     MessageQueue mq = new MessageQueue(topic, qd.getBrokerName(), i);
                     mqList.add(mq);
@@ -246,6 +248,7 @@ public class MQClientInstance {
                     this.serviceState = ServiceState.START_FAILED;
                     // If not specified,looking address from name server
                     if (null == this.clientConfig.getNamesrvAddr()) {
+                        // 获取 NameServer 地址
                         this.mQClientAPIImpl.fetchNameServerAddr();
                     }
                     // Start request-response channel
@@ -257,7 +260,7 @@ public class MQClientInstance {
                     this.pullMessageService.start();
                     // Start rebalance service 消息队列重新负载线程
                     this.rebalanceService.start();
-                    // Start push service
+                    // Start push service 启动 defaultMQProducer 内部的 defaultMQProducerImpl
                     this.defaultMQProducer.getDefaultMQProducerImpl().start(false);
                     log.info("the client factory [{}] start OK", this.clientId);
                     this.serviceState = ServiceState.RUNNING;
@@ -270,7 +273,11 @@ public class MQClientInstance {
         }
     }
 
+    /**
+     * 开启定时任务
+     */
     private void startScheduledTask() {
+        // 如果没有指定 namesrv，开启动态搜索 namesrv 的定时任务
         if (null == this.clientConfig.getNamesrvAddr()) {
             this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
 
@@ -285,6 +292,7 @@ public class MQClientInstance {
             }, 1000 * 10, 1000 * 60 * 2, TimeUnit.MILLISECONDS);
         }
 
+        // 周期性从 namesrv 拉取主题信息，30秒拉一次
         this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
 
             @Override
@@ -298,6 +306,7 @@ public class MQClientInstance {
             }
         }, 10, this.clientConfig.getPollNameServerInterval(), TimeUnit.MILLISECONDS);
 
+        // 1、清理下线的 broker 2、发送消费者和生产者的心跳信息到 broker
         this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
 
             @Override
@@ -311,6 +320,7 @@ public class MQClientInstance {
             }
         }, 1000, this.clientConfig.getHeartbeatBrokerInterval(), TimeUnit.MILLISECONDS);
 
+        // 持久化消息消费进度 offset
         this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
 
             @Override
@@ -324,6 +334,7 @@ public class MQClientInstance {
             }
         }, 1000 * 10, this.clientConfig.getPersistConsumerOffsetInterval(), TimeUnit.MILLISECONDS);
 
+        // 动态调整消费者的线程池大小，但是从底层代码来看并没有实现
         this.scheduledExecutorService.scheduleAtFixedRate(new Runnable() {
 
             @Override
@@ -529,7 +540,7 @@ public class MQClientInstance {
     }
 
     /**
-     * 更新主题路由信息
+     * 更新和维护主题路由信息
      * @param topic
      * @return
      */
@@ -633,6 +644,7 @@ public class MQClientInstance {
     public boolean updateTopicRouteInfoFromNameServer(final String topic, boolean isDefault,
         DefaultMQProducer defaultMQProducer) {
         try {
+            // 加锁
             if (this.lockNamesrv.tryLock(LOCK_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)) {
                 try {
                     TopicRouteData topicRouteData;
@@ -674,9 +686,9 @@ public class MQClientInstance {
                                 this.brokerAddrTable.put(bd.getBrokerName(), bd.getBrokerAddrs());
                             }
 
-                            // Update Pub info
+                            // Update Pub info 更新生产者路由信息
                             {
-                                // 根据 topicRouteData 中的 List<QueueData> 转换成问 topicPublishInfo 的 List<MessageQueue> 列表
+                                // 根据 topicRouteData 中的 List<QueueData> 转换成 topicPublishInfo 的 List<MessageQueue> 列表
                                 TopicPublishInfo publishInfo = topicRouteData2TopicPublishInfo(topic, topicRouteData);
                                 publishInfo.setHaveTopicRouterInfo(true);
                                 Iterator<Entry<String, MQProducerInner>> it = this.producerTable.entrySet().iterator();
@@ -690,7 +702,7 @@ public class MQClientInstance {
                                 }
                             }
 
-                            // Update sub info
+                            // Update sub info 更新消费者路由信息
                             {
                                 Set<MessageQueue> subscribeInfo = topicRouteData2TopicSubscribeInfo(topic, topicRouteData);
                                 Iterator<Entry<String, MQConsumerInner>> it = this.consumerTable.entrySet().iterator();
@@ -698,6 +710,7 @@ public class MQClientInstance {
                                     Entry<String, MQConsumerInner> entry = it.next();
                                     MQConsumerInner impl = entry.getValue();
                                     if (impl != null) {
+                                        // 更新 rebalanceImpl 的 topicSubscribeInfoTable
                                         impl.updateTopicSubscribeInfo(topic, subscribeInfo);
                                     }
                                 }

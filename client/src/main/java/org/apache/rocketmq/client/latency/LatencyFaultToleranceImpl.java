@@ -107,9 +107,9 @@ public class LatencyFaultToleranceImpl implements LatencyFaultTolerance<String> 
         private final String name;
 
         // currentLatency startTimeStamp 被 volatile 修饰
-        // 本次消息发送延迟
+        // 本次消息发送延迟（发送消息到出现异常的时间）
         private volatile long currentLatency;
-        // 故障规避开始时间
+        // 故障规避开始时间（在这个时间点以前，这个 brokerName 都会标记为故障）
         private volatile long startTimestamp;
 
         public FaultItem(final String name) {

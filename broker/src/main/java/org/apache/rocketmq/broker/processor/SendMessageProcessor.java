@@ -280,8 +280,10 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
                                       RemotingCommand request,
                                       MessageExt msg, TopicConfig topicConfig) {
         String newTopic = requestHeader.getTopic();
+        // 判断是否包含重试 topic 前缀
         if (null != newTopic && newTopic.startsWith(MixAll.RETRY_GROUP_TOPIC_PREFIX)) {
             String groupName = newTopic.substring(MixAll.RETRY_GROUP_TOPIC_PREFIX.length());
+            // 获取订阅组配置
             SubscriptionGroupConfig subscriptionGroupConfig =
                 this.brokerController.getSubscriptionGroupManager().findSubscriptionGroupConfig(groupName);
             if (null == subscriptionGroupConfig) {
@@ -291,14 +293,20 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
                 return false;
             }
 
+            // 获取订阅组配置的最大重试次数
             int maxReconsumeTimes = subscriptionGroupConfig.getRetryMaxTimes();
             if (request.getVersion() >= MQVersion.Version.V3_4_9.ordinal()) {
                 maxReconsumeTimes = requestHeader.getMaxReconsumeTimes();
             }
+
+            // 获取当前重试次数
             int reconsumeTimes = requestHeader.getReconsumeTimes() == null ? 0 : requestHeader.getReconsumeTimes();
+            // 判断当前重试次数是否已经是最大重试次数
             if (reconsumeTimes >= maxReconsumeTimes) {
+                // 超过最大重试次数进入 DLQ 队列，生成 DLQ 队列 topic，生成方式为 %DLQ% 前缀加上订阅组名称
                 newTopic = MixAll.getDLQTopic(groupName);
                 int queueIdInt = Math.abs(this.random.nextInt() % 99999999) % DLQ_NUMS_PER_GROUP;
+                // 构建 topic 配置
                 topicConfig = this.brokerController.getTopicConfigManager().createTopicInSendMessageBackMethod(newTopic,
                     DLQ_NUMS_PER_GROUP,
                     PermName.PERM_WRITE, 0
@@ -324,10 +332,11 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
                                         final RemotingCommand request,
                                         final SendMessageContext sendMessageContext,
                                         final SendMessageRequestHeader requestHeader) throws RemotingCommandException {
-
+        // 构建 Response 的 Header
         final RemotingCommand response = RemotingCommand.createResponseCommand(SendMessageResponseHeader.class);
         final SendMessageResponseHeader responseHeader = (SendMessageResponseHeader)response.readCustomHeader();
 
+        // 设置客户端请求序号
         response.setOpaque(request.getOpaque());
 
         response.addExtField(MessageConst.PROPERTY_MSG_REGION, this.brokerController.getBrokerConfig().getRegionId());
@@ -335,6 +344,7 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
 
         log.debug("receive SendMessage request command, {}", request);
 
+        // 判断当前时间 broker 是否提供服务，不提供则返回 code 为 SYSTEM_ERROR 的 response
         final long startTimstamp = this.brokerController.getBrokerConfig().getStartAcceptSendRequestTimeStamp();
         if (this.brokerController.getMessageStore().now() < startTimstamp) {
             response.setCode(ResponseCode.SYSTEM_ERROR);
@@ -343,6 +353,7 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
         }
 
         response.setCode(-1);
+        // 检查 topic 和 queue，如果不存在且 broker 设置中允许自动创建，则自动创建
         super.msgCheck(ctx, requestHeader, response);
         if (response.getCode() != -1) {
             return response;
@@ -351,16 +362,21 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
         final byte[] body = request.getBody();
 
         int queueIdInt = requestHeader.getQueueId();
+        // 获取 topic 的配置
         TopicConfig topicConfig = this.brokerController.getTopicConfigManager().selectTopicConfig(requestHeader.getTopic());
 
+        // 如果消息中的 queueId 小于 0，则随机选取一个 queue
         if (queueIdInt < 0) {
             queueIdInt = Math.abs(this.random.nextInt() % 99999999) % topicConfig.getWriteQueueNums();
         }
 
+        // 重新封装 request 中的 message 成 MessageExtBrokerInner
         MessageExtBrokerInner msgInner = new MessageExtBrokerInner();
         msgInner.setTopic(requestHeader.getTopic());
         msgInner.setQueueId(queueIdInt);
 
+        // 对于 RETRY 消息：(1) 判断是否 consumer 还存在 (2) 如果超过最大重发次数，尝试创建 DLQ，并将 topic 设置成 DeadQueue,消息将被存入死信队列
+        // 如果消息重试次数超过允许的最大重试次数，消息将进入 DLD 延迟队列。延迟队列主题：%DLQ%＋消费组名
         if (!handleRetryAndDLQ(requestHeader, response, request, msgInner, topicConfig)) {
             return response;
         }
@@ -390,6 +406,7 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
             // 执行 prepareMessage() 方法
             putMessageResult = this.brokerController.getTransactionalMessageService().prepareMessage(msgInner);
         } else {
+            // 调用 DefaultMessageStore#putMessage 进行消息存储
             putMessageResult = this.brokerController.getMessageStore().putMessage(msgInner);
         }
 
@@ -408,8 +425,9 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
         }
         boolean sendOK = false;
 
+        // 判断存放消息的状态是否成功
         switch (putMessageResult.getPutMessageStatus()) {
-            // Success
+            // Success 从这开始是成功状态
             case PUT_OK:
                 sendOK = true;
                 response.setCode(ResponseCode.SUCCESS);
@@ -427,7 +445,7 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
                 sendOK = true;
                 break;
 
-            // Failed
+            // Failed 从这开始是失败状态
             case CREATE_MAPEDFILE_FAILED:
                 response.setCode(ResponseCode.SYSTEM_ERROR);
                 response.setRemark("create mapped file failed, server is busy or broken.");
@@ -459,7 +477,7 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
 
         String owner = request.getExtFields().get(BrokerStatsManager.COMMERCIAL_OWNER);
         if (sendOK) {
-
+            // 增加 topic 存放数量、topic 存放大小等状态值
             this.brokerController.getBrokerStatsManager().incTopicPutNums(msg.getTopic(), putMessageResult.getAppendMessageResult().getMsgNum(), 1);
             this.brokerController.getBrokerStatsManager().incTopicPutSize(msg.getTopic(),
                 putMessageResult.getAppendMessageResult().getWroteBytes());
@@ -471,8 +489,10 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
             responseHeader.setQueueId(queueIdInt);
             responseHeader.setQueueOffset(putMessageResult.getAppendMessageResult().getLogicsOffset());
 
+            // 如果不是单向的 RPC 请求，则返回响应结果
             doResponse(ctx, request, response);
 
+            // 如果有发送消息钩子函数，则将消息 id、队列信息、发送状态、次数等信息设置到上下文，供钩子函数使用
             if (hasSendMessageHook()) {
                 sendMessageContext.setMsgId(responseHeader.getMsgId());
                 sendMessageContext.setQueueId(responseHeader.getQueueId());
@@ -489,6 +509,7 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
             }
             return null;
         } else {
+            // 如果是失败状态并且有发送消息钩子函数，则将发送状态、次数等信息设置到上下文，供钩子函数使用
             if (hasSendMessageHook()) {
                 int wroteSize = request.getBody().length;
                 int incValue = (int)Math.ceil(wroteSize / BrokerStatsManager.SIZE_PER_COUNT);
