@@ -44,7 +44,7 @@ public abstract class ReferenceResource {
      * @param intervalForcibly
      */
     public void shutdown(final long intervalForcibly) {
-        // 关闭 MappedFile 初次调用时 this.available 为 true，设置 this.available 为 false
+        // 关闭 MappedFile。初次调用时 this.available 为 true，设置 this.available 为 false
         if (this.available) {
             this.available = false;
             // 设置初次关闭的时间戳（firstShutdownTimestamp）为当前时间戳

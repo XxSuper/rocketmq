@@ -30,7 +30,7 @@ import org.apache.rocketmq.logging.InternalLogger;
 import org.apache.rocketmq.logging.InternalLoggerFactory;
 
 /**
- * MappedFileQueue 映射文件队列。MappedFileQueue 是 MappedFile 的管理容器， MappedFileQueue 是对存储目录的封装
+ * MappedFileQueue 映射文件队列。MappedFileQueue 是 MappedFile 的管理容器，MappedFileQueue 是对存储目录的封装
  */
 public class MappedFileQueue {
     private static final InternalLogger log = InternalLoggerFactory.getLogger(LoggerName.STORE_LOGGER_NAME);
@@ -113,9 +113,9 @@ public class MappedFileQueue {
 
     /**
      * 删除 offset 后的所有文件。遍历目录下的文件，如果文件的尾部偏移量小于 offset 则跳过该文件，如果尾部的偏移量大于 offset ，则进一步比较 offset 与文件的开始偏移量，
-     * 如果 offset 大于文件的起始偏移量，说明当前文件包含了有效偏移量 ，设置 MappedFile 的 flushedPosition 和 commitedPosition ；如果 offset 小于文件的起始偏移量，说
+     * 如果 offset 大于文件的起始偏移量，说明当前文件包含了有效偏移量，设置 MappedFile 的 flushedPosition 和 commitedPosition；如果 offset 小于文件的起始偏移量，说
      * 明该文件是有效文件后面创建的，调用 MappedFile#destory 释放 MappedFile 占用的内存资源（内存映射与内存通道等），然后加入到待删除文件列表中，最终调用 deleteExpiredFile
-     * 将文件从物理磁盘删除。过期文件的删除
+     * 将文件从物理磁盘删除。
      * @param offset
      */
     public void truncateDirtyFiles(long offset) {
@@ -172,8 +172,8 @@ public class MappedFileQueue {
         File dir = new File(this.storePath);
         File[] files = dir.listFiles();
         if (files != null) {
-            // 加载 Commitlog 文件，加载 ${ROCKET_HOME}/store/commitlog 下所有文件并按照文件名排序，如果文件大小与配置文件的单个文件大小不一致，将忽略该目录
-            // 下所有文件， 然后创建 MappedFile。 注意 load 方法将 wrotePosition、flushedPosition、committedPosition 三个指针都设置为文件大小
+            // 加载 Commitlog 文件，加载 ${ROCKET_HOME}/store/commitlog 目录下所有文件并按照文件名排序，如果文件大小与配置文件的单个文件大小不一致，将忽略该目录
+            // 下所有文件，然后创建 MappedFile 对象。注意 load 方法将 wrotePosition、flushedPosition、committedPosition 三个指针都设置为文件大小
             // ascending order
             Arrays.sort(files);
             for (File file : files) {
@@ -229,7 +229,7 @@ public class MappedFileQueue {
             createOffset = startOffset - (startOffset % this.mappedFileSize);
         }
 
-        // 如果在创建 MappedFile 时已经有存量的 MappedFile，则此次创建是由于最后一个 MappedFile 已经写满触发的，所以此次创建的新 MappedFile 偏移则为最后一个文件偏移 + mappedFileSize
+        // 如果在创建 MappedFile 时已经有存量的 MappedFile，则此次创建是由于最后一个 MappedFile 已经写满触发的，所以此次创建的新 MappedFile 偏移则为最后一个文件的初始偏移 + mappedFileSize
         if (mappedFileLast != null && mappedFileLast.isFull()) {
             createOffset = mappedFileLast.getFileFromOffset() + this.mappedFileSize;
         }
@@ -245,7 +245,7 @@ public class MappedFileQueue {
 
             // allocateMappedFileService 不为 null，表示启用了预创建功能，此时会同时向 allocateMappedFileService 提交两个创建任务，一个为此次需要创建的 MappedFile，一个为下次获取 MappedFile
             // 预创建的 MappedFile，此次需要创建的 MappedFile 的创建任务为同步创建，需要等其创建成功返回，而预创建的 MappedFile 则为异步创建
-                if (this.allocateMappedFileService != null) {
+            if (this.allocateMappedFileService != null) {
                 // MappedFile 默认大小1G，空间较大，且分配之后一般能够撑一段时间的写入，不用也不能预分配过多的MappedFile
                 mappedFile = this.allocateMappedFileService.putRequestAndReturnMappedFile(nextFilePath,
                     nextNextFilePath, this.mappedFileSize);
@@ -328,7 +328,7 @@ public class MappedFileQueue {
         return true;
     }
 
-    // 获取存储文件最小偏移 ，并不是直接返回 0，而是返回 MappedFile.getFileFromOffset()
+    // 获取存储文件最小偏移，并不是直接返回 0，而是返回 MappedFile.getFileFromOffset()
     public long getMinOffset() {
 
         if (!this.mappedFiles.isEmpty()) {
@@ -432,6 +432,7 @@ public class MappedFileQueue {
             }
         }
 
+        // 从 MappedFileQueue 中移除删除的过期文件
         deleteExpiredFile(files);
 
         return deleteCount;
@@ -514,7 +515,7 @@ public class MappedFileQueue {
      * Finds a mapped file by offset.
      * 根据消息偏移量 offset 查找 MappedFile
      * 由于使用了内存映射，只要存在于存储目录下的文件，都需要对应创建内存映射文件，如果不定时将已消费的消息从存储文件中删除，会造成极大的内存压力与资源浪费，所以 RocketMQ 采取定时删除存储文件的策略，也就是说在存储文件中，第一个文件不一定是 00000000000000000000，
-     * 因为该文件在某一时刻会被删除
+     * 因为该文件在某一时刻会被删除，故根据 offset 定位 MappedFile 的算法为 (int) ((offset / this.mappedFileSize) - (mappedFile.getFileFromOffset() / this.MappedFileSize))
      *
      * @param offset Offset.
      * @param returnFirstOnNotFound If the mapped file is not found, then return the first one.

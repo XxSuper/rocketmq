@@ -19,8 +19,8 @@ package org.apache.rocketmq.common.message;
 import java.io.Serializable;
 
 /**
- * 从本质上来说，RocketMQ 中的 Queue 是数据分片的产物。为了更好地理解 Queue 的定义，我们还需要引入一个新的概念：Topic分片。对于 RocketMQ ，一个 Topic 可以分布在各个 Broker 上，
- * 我们可以把一个 Topic 分布在一个 Broker上的子集定义为一个 Topic 分片。将 Topic 分片再切分为若干等分，其中的一份就是一个 Queue。每个 Topic 分片等分的 Queue 的数量可以不同，由用户在创建 Topic 时指定。
+ * 从本质上来说，RocketMQ 中的 Queue 是数据分片的产物。为了更好地理解 Queue 的定义，我们还需要引入一个新的概念：Topic 分片。对于 RocketMQ，一个 Topic 可以分布在各个 Broker 上，
+ * 我们可以把一个 Topic 分布在一个 Broker 上的子集定义为一个 Topic 分片。将 Topic 分片再切分为若干等分，其中的一份就是一个 Queue。每个 Topic 分片等分的 Queue 的数量可以不同，由用户在创建 Topic 时指定。
  */
 public class MessageQueue implements Comparable<MessageQueue>, Serializable {
     private static final long serialVersionUID = 6191200464116433425L;

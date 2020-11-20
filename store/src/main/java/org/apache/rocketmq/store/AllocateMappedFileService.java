@@ -61,7 +61,7 @@ public class AllocateMappedFileService extends ServiceThread {
             }
         }
 
-        // 创建分配任务，这个任务表示的是当前实际需要的且要等待期返回的 MappedFile 分配请求，AllocateRequest 自定义了 equal/hashCode 方法，同时要注意的是AllocateRequest也实现了Comparable接口
+        // 创建分配任务，这个任务表示的是当前实际需要的且要等待期返回的 MappedFile 分配请求，AllocateRequest 自定义了 equal/hashCode 方法，同时要注意的是 AllocateRequest 也实现了 Comparable 接口
         AllocateRequest nextReq = new AllocateRequest(nextFilePath, fileSize);
 
         // 如果该 filePath 和 fileSize 已经在 requestTable 中，则表示此次所需分配的 MappedFile 已经在上次分配时被预分配了，放入优先队列中可自动排序，文件偏移小的会先被分配
@@ -212,6 +212,7 @@ public class AllocateMappedFileService extends ServiceThread {
                     &&
                     this.messageStore.getMessageStoreConfig().isWarmMapedFileEnable()) {
                     // 通过加载分配空间的每个内存页进行写入，使分配的 ByteBuffer 加载到内存中，并和暂存池一样，避免其被操作系统换出
+                    // 判断 mappedFile 大小，只有 CommitLog 才进行文件预热预写入数据。按照系统的 pagesize 进行每个 pagesize 写入一个字节数据。为了把 mmap 方式映射的文件都加载到内存中。
                     mappedFile.warmMappedFile(this.messageStore.getMessageStoreConfig().getFlushDiskType(),
                         this.messageStore.getMessageStoreConfig().getFlushLeastPagesWhenWarmMapedFile());
                 }

@@ -18,6 +18,10 @@ package org.apache.rocketmq.common;
 
 import org.apache.rocketmq.common.constant.PermName;
 
+/**
+ *  Topic 是一个逻辑上的概念，实际上在每个 broker 上以 queue 的形式保存，也就是说每个 topi c在 broker 上会划分成几个逻辑队列，每个逻辑队列保存一部分消息数据，
+ *  但是保存的消息数据实际上不是真正的消息数据，而是指向commitlog的消息索引。
+ */
 public class TopicConfig {
     private static final String SEPARATOR = " ";
     public static int defaultReadQueueNums = 16;

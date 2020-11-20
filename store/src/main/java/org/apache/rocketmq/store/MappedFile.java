@@ -43,6 +43,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
+ * MappedFile 内存映射文件，MappedFile 是 RocketMQ 存映射文件的具体实现
  * RocketMQ 通过使用内存映射文件来提高 IO 访问性能，无论是 CommitLog 、ConsumeQueue、IndexFile ，单个文件都被设计为固定长度，如果一个文件写满以后再创建一个新文件，文件名就为该文件第一条消息对应的全局物理偏移量
  */
 public class MappedFile extends ReferenceResource {
@@ -66,7 +67,7 @@ public class MappedFile extends ReferenceResource {
     private final AtomicInteger flushedPosition = new AtomicInteger(0);
     // 文件大小
     protected int fileSize;
-    // 该 MappedFile 文件对应的 channel
+    // 文件通道，该 MappedFile 文件对应的 channel
     protected FileChannel fileChannel;
     /**
      * Message will put to here first, and then reput to FileChannel if writeBuffer is not null.
@@ -85,7 +86,7 @@ public class MappedFile extends ReferenceResource {
 
     // 物理文件，该 MappedFile 对应的实际文件
     private File file;
-    // 物理文件对应的内存映射 Buffer，通过 fileChannel.map 得到的可读写的内存映射 buffer，如果没有启用 TransientStorePool 则写数据时会写到该缓冲中，刷盘时直接调用该映射 buffer 的 force 函数，而不需要进行commit操作
+    // 物理文件对应的内存映射 Buffer，通过 fileChannel.map 得到的可读写的内存映射 buffer，如果没有启用 TransientStorePool 则写数据时会写到该缓冲区中，刷盘时直接调用该映射 buffer 的 force 函数，而不需要进行commit操作
     private MappedByteBuffer mappedByteBuffer;
     // 文件最后一次内容写入时间
     private volatile long storeTimestamp = 0;
@@ -202,7 +203,7 @@ public class MappedFile extends ReferenceResource {
         ensureDirOK(this.file.getParent());
 
         try {
-            // 通过 RandomAccessFile 建读写文件通道，内存文件映射
+            // 通过 RandomAccessFile 创建读写文件通道，内存文件映射
             this.fileChannel = new RandomAccessFile(this.file, "rw").getChannel();
             // 文件映射到虚拟内存，MapMode.READ_WRITE：读/写，对得到的缓冲区的更改最终将写入文件；但该更改对映射到同一文件的其他程序不一定是可见的
             // 将文件内容使用 NIO 的内存映射 Buffer 将文件映射到内存中
@@ -252,7 +253,7 @@ public class MappedFile extends ReferenceResource {
         // 获取 MappedFile 当前写指针
         int currentPos = this.wrotePosition.get();
 
-        // currentPos 大于或等于文件大小则表明文件已写满，抛出 AppendMessageStatus.UNKNOWN_ERROR，如果 currentPos 小于文件大小，通过 slice() 方法创建一个与 MappedFile 的共
+        // 如果 currentPos 大于或等于文件大小则表明文件已写满，抛出 AppendMessageStatus.UNKNOWN_ERROR，如果 currentPos 小于文件大小，通过 slice() 方法创建一个与 MappedFile 的共
         // 存区，并设置 position 为当前写指针
         if (currentPos < this.fileSize) {
             // 如果 writeBuffer 不为空，则优先写入 writeBuffer（暂存池中获取的），否则写入 mappedByteBuffer，如果启用了暂存池 TransientStorePool 则 writeBuffer 会被初始化
@@ -321,7 +322,7 @@ public class MappedFile extends ReferenceResource {
     }
 
     /**
-     *  MappedFile 刷盘（flush)，刷盘指的是将内存中的数据刷写到磁盘，永久存储在磁盘中
+     * MappedFile 刷盘（flush)，刷盘指的是将内存中的数据刷写到磁盘，永久存储在磁盘中
      * @return The current flushed position
      */
     public int flush(final int flushLeastPages) {
@@ -361,7 +362,7 @@ public class MappedFile extends ReferenceResource {
      * @return
      */
     public int commit(final int commitLeastPages) {
-        // writeBuffer 如果为空，直接返回 wrotePosition 指针 ，无须执行 commit 操作， commit 操作主体是 writeBuffer
+        // writeBuffer 如果为空，直接返回 wrotePosition 指针 ，无须执行 commit 操作，表明 commit 操作主体是 writeBuffer
         if (writeBuffer == null) {
             //no need to commit data to file channel, so just regard wrotePosition as committedPosition.
             return this.wrotePosition.get();
@@ -401,7 +402,7 @@ public class MappedFile extends ReferenceResource {
             try {
                 // 首先创建 writeBuffer 的共享缓存区
                 ByteBuffer byteBuffer = writeBuffer.slice();
-                // 然后将新的 position 回退到上一次提交的位置（committedPosition）
+                // 然后将新创建的 position 回退到上一次提交的位置（committedPosition）
                 byteBuffer.position(lastCommittedPosition);
                 // 设置 limit 为 wrotePosition（当前最大有效数据指针）
                 byteBuffer.limit(writePos);
@@ -476,7 +477,7 @@ public class MappedFile extends ReferenceResource {
     public SelectMappedBufferResult selectMappedBuffer(int pos, int size) {
         // 查找 pos 到当前最大可读之间的数据，由于在整个写入期间都未曾改变 MappedByteBuffer 的指针，所以 mappedByteBuffer.slice() 方法返回的共享缓存区空间为整个 mappedFile
         // 然后通过设置 byteBuffer 的 position 为待查找的值，读取字节为当前可读字节长度，最终返回的 ByteBuffer 的 limit （可读最大长度）为 size。整个共享缓存区的容量
-        // 为（ MappedFile#fileSize-pos ，故在操作 SelectMappedBufferResult 不能对包含在里面的 ByteBuffer 调用 flip 方法
+        // 为（MappedFile#fileSize-pos），故在操作 SelectMappedBufferResult 不能对包含在里面的 ByteBuffer 调用 flip 方法
         int readPosition = getReadPosition();
         if ((pos + size) <= readPosition) {
             if (this.hold()) {
@@ -497,6 +498,11 @@ public class MappedFile extends ReferenceResource {
         return null;
     }
 
+    /**
+     * 查找 pos 到当前最大可读之间的数据
+     * @param pos
+     * @return
+     */
     public SelectMappedBufferResult selectMappedBuffer(int pos) {
         int readPosition = getReadPosition();
         if (pos < readPosition && pos >= 0) {
@@ -589,7 +595,7 @@ public class MappedFile extends ReferenceResource {
      * @return The max position which have valid data
      */
     public int getReadPosition() {
-        // 如果 writeBuffer 为空， 直接返回当前的写指针，如果 writeBuffer 不为空，则返回上一次提交的指针，在 MappedFile 设计中，只有提交了的数据（写入到 MappedByteBuffer FileChannel 中的数据 ）才是安全的数据
+        // 获取当前文件最大的可读指针。如果 writeBuffer 为空， 直接返回当前的写指针，如果 writeBuffer 不为空，则返回上一次提交的指针，在 MappedFile 设计中，只有提交了的数据（写入到 MappedByteBuffer FileChannel 中的数据 ）才是安全的数据
         return this.writeBuffer == null ? this.wrotePosition.get() : this.committedPosition.get();
     }
 
@@ -597,6 +603,21 @@ public class MappedFile extends ReferenceResource {
         this.committedPosition.set(pos);
     }
 
+    /**
+     * 文件预热：文件预热的时候需要了解的知识点。操作系统的 Page Cache 和内存映射技术 mmap。
+     *
+     * Page Cache：Page Cache 叫做页缓存，而每一页的大小通常是4K，在 Linux 系统中写入数据的时候并不会直接写到硬盘上，而是会先写到 Page Cache 中，并打上 dirty 标识，由内核线程 flusher 定期将被打上 dirty 的页发送给 IO 调度层，最后由 IO 调度决定何时落地到磁盘中，
+     * 而 Linux 一般会把还没有使用的内存全拿来给 Page Cache 使用。而读的过程也是类似，会先到 Page Cache 中寻找是否有数据，有的话直接返回，如果没有才会到磁盘中去读取并写入 Page Cache 然后再次读取 Page Cache 并返回。而且读的这个过程中操作系统也会有一个预读的操作，
+     * 你的每一次读取操作系统都会帮你预读出后面一部分数据，而且当你一直在使用预读数据的时候，系统会帮你预读出更多的数据(最大到 128K )。
+     *
+     * mmap：mmap 是一种将文件映射到虚拟内存的技术，可以将文件在磁盘位置的地址和在虚拟内存中的虚拟地址通过映射对应起来，之后就可以在内存这块区域进行读写数据，而不必调用系统级别的 read、wirte 这些函数，从而提升 IO 操作性能，
+     * 另外一点就是 mmap 后的虚拟内存大小必须是内存页大小 (通常是 4K) 的倍数，之所以这么做是为了匹配内存操作。
+     *
+     * 这里 MappedFile 已经创建，对应的 Buffer 为 mappedByteBuffer。mappedByteBuffer 已经通过 mmap 映射，此时操作系统中只是记录了该文件和该 Buffer 的映射关系，而没有映射到物理内存中。这里就通过对该 MappedFile 的每个 Page Cache 进行写入一个字节，通过读写操作把 mmap 映射全部加载到物理内存中。
+     *
+     * @param type
+     * @param pages
+     */
     public void warmMappedFile(FlushDiskType type, int pages) {
         long beginTime = System.currentTimeMillis();
         ByteBuffer byteBuffer = this.mappedByteBuffer.slice();
@@ -605,6 +626,7 @@ public class MappedFile extends ReferenceResource {
         for (int i = 0, j = 0; i < this.fileSize; i += MappedFile.OS_PAGE_SIZE, j++) {
             byteBuffer.put(i, (byte) 0);
             // force flush when flush disk type is sync
+            // 如果是同步写盘操作，则进行强行刷盘操作
             if (type == FlushDiskType.SYNC_FLUSH) {
                 if ((i / OS_PAGE_SIZE) - (flush / OS_PAGE_SIZE) >= pages) {
                     flush = i;
@@ -625,6 +647,7 @@ public class MappedFile extends ReferenceResource {
         }
 
         // force flush when prepare load finished
+        // 把剩余的数据强制刷新到磁盘中
         if (type == FlushDiskType.SYNC_FLUSH) {
             log.info("mapped file warm-up done, force to disk, mappedFile={}, costTime={}",
                 this.getFileName(), System.currentTimeMillis() - beginTime);
@@ -660,16 +683,22 @@ public class MappedFile extends ReferenceResource {
         this.firstCreateInQueue = firstCreateInQueue;
     }
 
+    /**
+     * 该方法主要是实现文件预热后，防止把预热过的文件被操作系统调到 swap 空间中。当程序再次读取交换出去的数据的时候会产生缺页异常。
+     * LibC.INSTANCE.mlock 和 LibC.INSTANCE.madvise 都是调用的 Native 方法。
+     */
     public void mlock() {
         final long beginTime = System.currentTimeMillis();
         final long address = ((DirectBuffer) (this.mappedByteBuffer)).address();
         Pointer pointer = new Pointer(address);
         {
+            // 将锁住指定的内存区域避免被操作系统调到 swap 空间中。
             int ret = LibC.INSTANCE.mlock(pointer, new NativeLong(this.fileSize));
             log.info("mlock {} {} {} ret = {} time consuming = {}", address, this.fileName, this.fileSize, ret, System.currentTimeMillis() - beginTime);
         }
 
         {
+            // 一次性先将一段数据读入到映射内存区域，这样就减少了缺页异常的产生。
             int ret = LibC.INSTANCE.madvise(pointer, new NativeLong(this.fileSize), LibC.MADV_WILLNEED);
             log.info("madvise {} {} {} ret = {} time consuming = {}", address, this.fileName, this.fileSize, ret, System.currentTimeMillis() - beginTime);
         }

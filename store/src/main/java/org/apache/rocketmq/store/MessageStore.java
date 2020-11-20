@@ -26,6 +26,10 @@ import org.apache.rocketmq.store.stats.BrokerStatsManager;
 
 /**
  * This class defines contracting interfaces to implement, allowing third-party vendor to use customized message store.
+ * RocketMQ 主要存储的文件包括 Comitlog 文件、ConsumeQueue 文件、IndexFile 文件。RocketMQ 将所有主题的消息存储在同一个文件中，确保消息发送时顺序写文件，尽最大的能力确保消息发送的高性能与高吞吐量。
+ * 但由于消息中间件一般是基于消息主题的订阅机制，这样便给按照消息主题检索消息带来了极大的不便。为了提高消息消费的效率，RocketMQ 引入了 ConsumeQueue 消息消费队列文件，每个消息主题包含多个消息消费队
+ * 列，每一个消息消费队列有一个消息文件。IndexFile 索引文件，其主要设计理念就是为了加速消息的检索性能，根据消息的属性快速从 Commitlog 文件中检索消息。
+ * RocketMQ 是一款高性能的消息中间件，存储部分的设计是核心，存储的核心是 IO 访问性能
  */
 public interface MessageStore {
 

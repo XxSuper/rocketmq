@@ -208,7 +208,7 @@ public class IndexService {
 
     public void buildIndex(DispatchRequest req) {
         // 获取或创建 IndexFile 文件并获取所有文件最大的物理偏移量。如果该消息的物
-        // 理偏移量小于索引文件中的物理偏移，则说明是重复数据，忽略本次索引构建
+        // 理偏移量小于索引文件中的物理偏移量，则说明是重复数据，忽略本次索引构建
         IndexFile indexFile = retryGetAndCreateIndexFile();
         if (indexFile != null) {
             long endPhyOffset = indexFile.getEndPhyOffset();

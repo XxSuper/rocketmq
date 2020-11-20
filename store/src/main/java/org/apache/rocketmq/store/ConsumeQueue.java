@@ -31,15 +31,15 @@ import java.util.List;
  *
  * RocketMQ 基于主题订阅模式实现消息消费，消费者关心的是一个主题下的所有消息，但由于同一主题的消息不连续地存储在 commitlog 文件中，
  * 直接从消息存储文件 Commitlog 中去遍历查找订阅主题下的消息，效率将极其低下，RocketMQ 为了适应消息消费的检索需求，设计了消息消费队列文件 Consumequeue
- * 该文件可以看成是 Commitlog 关于消息消费的“索引”文件，Consumequeue 的第一级目录为消息主题，第二级目录为主题的消息队列，为了加速 ConsumeQueue 消息
+ * 该文件可以看成是 Commitlog 关于消息消费的"索引"文件，Consumequeue 的第一级目录为消息主题，第二级目录为主题的消息队列，为了加速 ConsumeQueue 消息
  * 条目的检索速度与节省磁盘空间，每一个 Consumequeue 条目不会存储消息的全量信息。
  *
  * ----------------------------------------------------------------------------------------
  *            8字节                  |         4字节            |            8个字节        |
  *     commitlog offset             |         size            |       tag hashcode       |
  * ---------------------------------------------------------------------------------------
- * 单个 ConsumeQueue 文件中默认包含 30 万个条目，单个文件的长度为 30w * 20 字节，单个 ConsumeQueue 文件可以看出=成是一个 ConsumeQueue 条目的数组，
- * 其下标为 ConsumeQueue 的逻辑偏移量，消息消费进度存储的偏移量即逻辑偏移量。 ConsumeQueue 即为 Commitlog 文件的索引文件， 其构建机制是当消息到达 Commitlog 文件后，
+ * 单个 ConsumeQueue 文件中默认包含 30 万个条目，单个文件的长度为 30w * 20 字节，单个 ConsumeQueue 文件可以看成是一个 ConsumeQueue 条目的数组，
+ * 其下标为 ConsumeQueue 的逻辑偏移量，消息消费进度存储的偏移量即逻辑偏移量。ConsumeQueue 即为 Commitlog 文件的索引文件，其构建机制是当消息到达 Commitlog 文件后，
  * 由专门的线程产生消息转发任务，从而构建消息消费队列文件与索引文件
  *
  */
@@ -104,25 +104,36 @@ public class ConsumeQueue {
     }
 
     public void recover() {
+        // 获取该消息队列的所有内存映射文件
         final List<MappedFile> mappedFiles = this.mappedFileQueue.getMappedFiles();
         if (!mappedFiles.isEmpty()) {
-
+            // 只从倒数第3个文件开始，这应该是一个经验值
             int index = mappedFiles.size() - 3;
             if (index < 0)
                 index = 0;
 
+            // ConsumeQueue 逻辑大小
             int mappedFileSizeLogics = this.mappedFileSize;
+            // 该 queue 对应的内存映射文件
             MappedFile mappedFile = mappedFiles.get(index);
+            // 内存映射文件对应的 ByteBuffer
             ByteBuffer byteBuffer = mappedFile.sliceByteBuffer();
+            // 处理的 offset,默认从 ConsumeQueue 中存放的第一个条目开始
             long processOffset = mappedFile.getFileFromOffset();
             long mappedFileOffset = 0;
             long maxExtAddr = 1;
             while (true) {
+                // 循环验证 ConsumeQueue 包含条目的有效性（如果 offset 大于 0 并且 size 大于 0，则表示是一个有效的条目）
                 for (int i = 0; i < mappedFileSizeLogics; i += CQ_STORE_UNIT_SIZE) {
+                    // 读取一个条目的内容
+                    // commitlog 中的物理偏移量
                     long offset = byteBuffer.getLong();
+                    // 该条消息的消息总长度
                     int size = byteBuffer.getInt();
+                    // tag hashcode
                     long tagsCode = byteBuffer.getLong();
 
+                    // 如果 offset 大于 0 并且 size 大于 0，则表示是一个有效的条目，设置 ConsumeQueue 中有效的 mappedFileOffset，继续下一个条目的验证，如果发现不正常的条目，则跳出循环
                     if (offset >= 0 && size > 0) {
                         mappedFileOffset = i + CQ_STORE_UNIT_SIZE;
                         this.maxPhysicOffset = offset + size;
@@ -136,6 +147,7 @@ public class ConsumeQueue {
                     }
                 }
 
+                // 如果该 ConsumeQueue 文件中所有条目全部有效，则继续验证下一个文件（index++），如果发现条目不合法，后面的文件不需要再检测。
                 if (mappedFileOffset == mappedFileSizeLogics) {
                     index++;
                     if (index >= mappedFiles.size()) {
@@ -157,9 +169,12 @@ public class ConsumeQueue {
                 }
             }
 
+            // processOffset 代表了当前 ConsumeQueue 有效的偏移量
             processOffset += mappedFileOffset;
+            // 设置 flushedWhere、committedWhere 为当前有效的偏移量
             this.mappedFileQueue.setFlushedWhere(processOffset);
             this.mappedFileQueue.setCommittedWhere(processOffset);
+            // 截断无效的 ConsumeQueue 文件
             this.mappedFileQueue.truncateDirtyFiles(processOffset);
 
             if (isExtReadEnable()) {
@@ -186,7 +201,7 @@ public class ConsumeQueue {
             int high = 0;
             int midOffset = -1, targetOffset = -1, leftOffset = -1, rightOffset = -1;
             long leftIndexValue = -1L, rightIndexValue = -1L;
-            // 获取当前存储文件中有效的最小消息物理偏移 minPhysicOffset
+            // 获取当前存储文件中有效的最小消息物理偏移量 minPhysicOffset
             long minPhysicOffset = this.defaultMessageStore.getMinPhyOffset();
             SelectMappedBufferResult sbr = mappedFile.selectMappedBuffer(0);
             if (null != sbr) {
@@ -203,22 +218,21 @@ public class ConsumeQueue {
                         long phyOffset = byteBuffer.getLong();
                         // 读取 4 个字节（size）
                         int size = byteBuffer.getInt();
-                        // 如果得到的（ consumelog ）条目中存储的物理偏移量小于 commitlog 当前的最小物理偏移量，说明待查找的物理偏移量肯定
+                        // 如果得到的（consumelog）条目中存储的物理偏移量小于 commitlog 当前的最小物理偏移量，说明待查找的物理偏移量肯定
                         // 大于 midOffset，所以将 low 设置为 midOffset + CQ_STORE_UNIT_SIZE，然后继续折半查找
                         if (phyOffset < minPhysicOffset) {
                             low = midOffset + CQ_STORE_UNIT_SIZE;
                             leftOffset = midOffset;
                             continue;
                         }
-                        // 如果 offset 大于最小物理偏移，说明该消息是有效消息，则根据消息偏移量和消
-                        // 息长度获取消息的存储时间戳
+                        // 如果 offset 大于最小物理偏移量，说明该消息是有效消息，则根据消息偏移量和消息长度获取消息的存储时间戳
                         long storeTime =
                             this.defaultMessageStore.getCommitLog().pickupStoreTimestamp(phyOffset, size);
                         // 如果存储时间小于 0，消息为无效消息，直接返回
                         if (storeTime < 0) {
                             return 0;
                         } else if (storeTime == timestamp) {
-                            // 如果存储时间戳等于待查找时间戳，说明查找到匹配消息，设 targetOffset 并跳出循环
+                            // 如果存储时间戳等于待查找时间戳，说明查找到匹配消息，设置 targetOffset 并跳出循环
                             targetOffset = midOffset;
                             break;
                         } else if (storeTime > timestamp) {
@@ -227,7 +241,7 @@ public class ConsumeQueue {
                             rightOffset = midOffset;
                             rightIndexValue = storeTime;
                         } else {
-                            // 如果存储时间戳小于待查找时间戳，说明待查找消息在大于 midOffset ，则设置 low 为 midOffset + CQ_STORE_UNIT_SIZE，并设 leftIndexValue 等于 storeTime，leftOffset 等于当前 midOffset
+                            // 如果存储时间戳小于待查找时间戳，说明待查找消息在大于 midOffset ，则设置 low 为 midOffset + CQ_STORE_UNIT_SIZE，并设置 leftIndexValue 等于 storeTime，leftOffset 等于当前 midOffset
                             low = midOffset + CQ_STORE_UNIT_SIZE;
                             leftOffset = midOffset;
                             leftIndexValue = storeTime;
@@ -426,12 +440,13 @@ public class ConsumeQueue {
         boolean canWrite = this.defaultMessageStore.getRunningFlags().isCQWriteable();
         for (int i = 0; i < maxRetries && canWrite; i++) {
             long tagsCode = request.getTagsCode();
+            // 如果配置启动了 ConsumeQueue 扩展类型，则为 ConsumerQueue 构建扩展索引 ConsumeQueueExt。
             if (isExtWriteEnable()) {
                 ConsumeQueueExt.CqExtUnit cqExtUnit = new ConsumeQueueExt.CqExtUnit();
                 cqExtUnit.setFilterBitMap(request.getBitMap());
                 cqExtUnit.setMsgStoreTime(request.getStoreTimestamp());
                 cqExtUnit.setTagsCode(request.getTagsCode());
-
+                // 如果配置的扩展类型地址，则 ConsumerQueue 中 tagsCode 保存的值是扩展信息的偏移量。
                 long extAddr = this.consumeQueueExt.put(cqExtUnit);
                 if (isExtAddr(extAddr)) {
                     tagsCode = extAddr;
@@ -482,7 +497,7 @@ public class ConsumeQueue {
         this.byteBufferIndex.putInt(size);
         this.byteBufferIndex.putLong(tagsCode);
 
-        // 消息队列偏移量 + 消息队列存储单位大小
+        // 根据 consumeQueueOffset 计算 ConumeQueue 中的物理地址，消息队列偏移量 + 消息队列存储单位大小
         final long expectLogicOffset = cqOffset * CQ_STORE_UNIT_SIZE;
 
         // 获取 MappedFile 映射文件
@@ -523,7 +538,7 @@ public class ConsumeQueue {
             }
             // commitlog 的物理偏移量 + 大小
             this.maxPhysicOffset = offset + size;
-            // 写入消息消费队列
+            // 将内容追加到 ConsumeQueue 的内存映射文件中（本操作只追击不刷盘），ConumeQueue 的刷盘方式固定为异步刷盘模式，写入消息消费队列
             return mappedFile.appendMessage(this.byteBufferIndex.array());
         }
         return false;
@@ -551,7 +566,7 @@ public class ConsumeQueue {
         // startIndex * mappedFileSize（20），得到在 consumequeue 中的物理偏移量
         long offset = startIndex * CQ_STORE_UNIT_SIZE;
         // 如果该 offset 小于 minLogicOffset，则返回 null。，说明该消息已被删除。如果大于 minLogicOffset ，则根据偏移量定位到具体的物理文件，然后通过 offset 与物理文件大小
-        // 取模获取在该文件的偏移量，从而从偏移量开始连续读取 20 个节即可
+        // 取模获取在该文件的偏移量，从而从偏移量开始连续读取 20 个字节即可
         if (offset >= this.getMinLogicOffset()) {
             MappedFile mappedFile = this.mappedFileQueue.findMappedFileByOffset(offset);
             if (mappedFile != null) {
@@ -613,6 +628,9 @@ public class ConsumeQueue {
         this.maxPhysicOffset = maxPhysicOffset;
     }
 
+    /**
+     * 重置 ConsumeQueue 的 maxPhysicOffset、minLogicOffset 然后调用 MappedFileQueue 的 destroy 方法将消息消费队列目录下的所有文件全部删除
+     */
     public void destroy() {
         this.maxPhysicOffset = -1;
         this.minLogicOffset = 0;
