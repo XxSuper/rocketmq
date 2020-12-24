@@ -131,9 +131,9 @@ public class DefaultMQPushConsumer extends ClientConfig implements MQPushConsume
      * 根据消息进度从消息服务器拉取不到消息时重新计算消费策略
      * CONSUME_FROM_LAST_OFFSET：从队列当前最大偏移量开始消费
      * CONSUME_FROM_FIRST_OFFSET：从队列当前最小偏移量开始消费
-     * CONSUME_FROM_TIMESTAMP：：从消费者启动时间戳开始消费
+     * CONSUME_FROM_TIMESTAMP：从消费者启动时间戳开始消费
      *
-     * 如果从消息进度服务 OffsetStore 读取到 MessageQueue 中的偏移量不小于 0，则使用读取到的偏移量，只有在读到的偏移量小于 0 时，上述策略才会生效
+     * 注意：如果从消息进度服务 OffsetStore 读取到 MessageQueue 中的偏移量不小于 0，则使用读取到的偏移量，只有在读到的偏移量小于 0 时，上述策略才会生效
      */
     private ConsumeFromWhere consumeFromWhere = ConsumeFromWhere.CONSUME_FROM_LAST_OFFSET;
 
@@ -153,7 +153,7 @@ public class DefaultMQPushConsumer extends ClientConfig implements MQPushConsume
 
     /**
      * Subscription relationship
-     * 订阅信息
+     * 订阅信息，subscribe(String topic, String subExpression) 方法构建
      */
     private Map<String /* topic */, String /* sub expression */> subscription = new HashMap<String, String>();
 
@@ -177,7 +177,7 @@ public class DefaultMQPushConsumer extends ClientConfig implements MQPushConsume
 
     /**
      * Max consumer thread number
-     * 消费者最大线程数，由于消费者线程池使用无界队列，故消费者线程个数其实最多只有 consumeThreadMin 个
+     * 消费者最大线程数，由于消费者线程池使用无界队列，故消费者线程个数其实最多只有 consumeThreadMax 个
      */
     private int consumeThreadMax = 20;
 
@@ -188,7 +188,7 @@ public class DefaultMQPushConsumer extends ClientConfig implements MQPushConsume
 
     /**
      * Concurrently max span offset.it has no effect on sequential consumption
-     * 并发消息消费时处理队列最大跨度，默认 2000，表示如果消息处理队列中偏移量最大的消息与偏移量最小的消息的跨度超过 2000 则延迟 50 毫秒后再拉去
+     * 并发消息消费时处理队列最大跨度，默认 2000，表示如果消息处理队列中偏移量最大的消息与偏移量最小的消息的跨度超过 2000 则延迟 50 毫秒后再拉取消息
      */
     private int consumeConcurrentlyMaxSpan = 2000;
 
@@ -238,7 +238,7 @@ public class DefaultMQPushConsumer extends ClientConfig implements MQPushConsume
 
     /**
      * Batch consumption size
-     * 消息并发消费时一次消费消息条数，通俗点说就是每次传入 messageListener#consumeMessage 的消息条数.
+     * 消息并发消费时一次消费消息条数，通俗点说就是每次传入 messageListener#consumeMessage 中的消息条数.
      */
     private int consumeMessageBatchMaxSize = 1;
 
@@ -266,7 +266,7 @@ public class DefaultMQPushConsumer extends ClientConfig implements MQPushConsume
      * If messages are re-consumed more than {@link #maxReconsumeTimes} before success, it's be directed to a deletion
      * queue waiting.
      *
-     * 最大消费重试次数，如果消息消费次数超过 maxReconsumeTimes 还未成功，则将该消息转移到一个失败队列 ，等待被删除
+     * 最大消费重试次数，如果消息消费次数超过 maxReconsumeTimes 还未成功，则将该消息转移到一个失败队列，等待被删除
      */
     private int maxReconsumeTimes = -1;
 
@@ -350,9 +350,9 @@ public class DefaultMQPushConsumer extends ClientConfig implements MQPushConsume
      * Constructor specifying namespace, consumer group, RPC hook and message queue allocating algorithm.
      *
      * @param namespace Namespace for this MQ Producer instance.
-     * @param consumerGroup Consume queue.
-     * @param rpcHook RPC hook to execute before each remoting command.
-     * @param allocateMessageQueueStrategy Message queue allocating algorithm.
+     * @param consumerGroup Consume queue. 消费者组名
+     * @param rpcHook RPC hook to execute before each remoting command. rpc 钩子函数
+     * @param allocateMessageQueueStrategy Message queue allocating algorithm. 分配消息队列策略(默认是平均分配)
      */
     public DefaultMQPushConsumer(final String namespace, final String consumerGroup, RPCHook rpcHook,
         AllocateMessageQueueStrategy allocateMessageQueueStrategy) {
@@ -758,7 +758,7 @@ public class DefaultMQPushConsumer extends ClientConfig implements MQPushConsume
 
     /**
      * Register a callback to execute on message arrival for concurrent consuming.
-     * 注册并发消息事件监听器
+     * 注册并发消费消息事件监听器
      *
      * @param messageListener message handling callback.
      */
@@ -785,7 +785,7 @@ public class DefaultMQPushConsumer extends ClientConfig implements MQPushConsume
      * 基于主题订阅消息
      *
      * @param topic topic to subscribe. 消息主题
-     * @param subExpression subscription expression.it only support or operation such as "tag1 || tag2 || tag3" <br> 消息过滤表达式， TAG或SQL92 表达式
+     * @param subExpression subscription expression.it only support or operation such as "tag1 || tag2 || tag3" <br> 消息过滤表达式，TAG 或 SQL92 表达式
      * if null or * expression,meaning subscribe all
      * @throws MQClientException if there is any client error.
      */

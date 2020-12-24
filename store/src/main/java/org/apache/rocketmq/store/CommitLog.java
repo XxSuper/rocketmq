@@ -670,6 +670,8 @@ public class CommitLog {
             || tranType == MessageSysFlag.TRANSACTION_COMMIT_TYPE) {
             // Delay Delivery
             // 如果消息的延迟级别大于0，将消息的原主题名称与原消息队列 ID 存入消息属性中，用延迟消息主题 SCHEDULE_TOPIC、消息队列 ID 更新原先消息的主题与队列，这是并发消息消费重试关键的一步
+            // 在存入 Commitlog 文件之前，如果消息的延迟级别 delayTimeLevel 大于 0，替换消息的主题与队列为定时任务主题 "SCHEDU_TOPIC_XXXX"，队列 ID 为延迟级别减 1。
+            // 再次将消息主题、队列存入消息的属性中，键分别为 PROPERTY_REAL_TOPIC、PROPERTY_REAL_QUEUE_ID
             if (msg.getDelayTimeLevel() > 0) {
                 if (msg.getDelayTimeLevel() > this.defaultMessageStore.getScheduleMessageService().getMaxDelayLevel()) {
                     msg.setDelayTimeLevel(this.defaultMessageStore.getScheduleMessageService().getMaxDelayLevel());

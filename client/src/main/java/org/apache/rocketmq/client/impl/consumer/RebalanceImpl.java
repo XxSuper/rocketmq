@@ -49,9 +49,10 @@ import org.apache.rocketmq.common.protocol.heartbeat.SubscriptionData;
 public abstract class RebalanceImpl {
     protected static final InternalLogger log = ClientLogger.getLog();
     protected final ConcurrentMap<MessageQueue, ProcessQueue> processQueueTable = new ConcurrentHashMap<MessageQueue, ProcessQueue>(64);
-    // MQClientInstance#startScheduledTask 周期性的更新路由信息、DefaultMQPushConsumerImpl#start 更新路由信息
+    // MQClientInstance#startScheduledTask 周期性的更新路由信息、DefaultMQPushConsumerImpl#start 更新路由信息；DefaultMQPushConsumerImpl#updateTopicSubscribeInfoWhenSubscriptionChanged填充
     protected final ConcurrentMap<String/* topic */, Set<MessageQueue>> topicSubscribeInfoTable =
         new ConcurrentHashMap<String, Set<MessageQueue>>();
+    // 在调用消费者 DefaultMQPushConsumerImpl.subscribe 方法时填充
     protected final ConcurrentMap<String /* topic */, SubscriptionData> subscriptionInner =
         new ConcurrentHashMap<String, SubscriptionData>();
     protected String consumerGroup;
@@ -181,6 +182,7 @@ public abstract class RebalanceImpl {
         // 按照 Broker 分组消息消费队列
         HashMap<String, Set<MessageQueue>> brokerMqs = this.buildProcessQueueTableByBrokerName();
 
+        // 遍历所有的 brokerName
         Iterator<Entry<String, Set<MessageQueue>>> it = brokerMqs.entrySet().iterator();
         while (it.hasNext()) {
             Entry<String, Set<MessageQueue>> entry = it.next();
@@ -190,15 +192,17 @@ public abstract class RebalanceImpl {
             if (mqs.isEmpty())
                 continue;
 
+            // 根据 brokerName 在客户端本地查找到对应的 broker 的地址
             FindBrokerResult findBrokerResult = this.mQClientFactory.findBrokerAddressInSubscribe(brokerName, MixAll.MASTER_ID, true);
             if (findBrokerResult != null) {
+                // 根据消费者组名、clientId、对应 broker 下的消息队列集合，通过 MQClientAPIInstance 发送给 broker，获得到成功被当前消费者锁定的消息消费队列
                 LockBatchRequestBody requestBody = new LockBatchRequestBody();
                 requestBody.setConsumerGroup(this.consumerGroup);
                 requestBody.setClientId(this.mQClientFactory.getClientId());
                 requestBody.setMqSet(mqs);
 
                 try {
-                    // 向 Broker ( Master 点) 发送锁定消息队列，该方法返回成功被当前消费者锁定的消息消费队列
+                    // 向 Broker (Master 主节点) 发送锁定消息队列，该方法返回成功被当前消费者锁定的消息消费队列
                     Set<MessageQueue> lockOKMQSet =
                         this.mQClientFactory.getMQClientAPIImpl().lockBatchMQ(findBrokerResult.getBrokerAddr(), requestBody, 1000);
 
@@ -280,7 +284,7 @@ public abstract class RebalanceImpl {
                 // 从主题订阅信息缓存表中获取主题的队列信息
                 Set<MessageQueue> mqSet = this.topicSubscribeInfoTable.get(topic);
                 // consumer 启动后将获取路由信息填充到 MQClientInstance -> ConcurrentMap<String/* Topic */, TopicRouteData> topicRouteTable
-                // 发送请求从 Broker 中获取该消费组内当前所有的消费者客户端 ID，主题 topic 的队列可能分布在多个 Broker上，请求发往哪个 Broker 呢？ RocketeMQ 从主题的路由信息中随机选择一个 Broker。 Broker
+                // 发送请求从 Broker 中获取该消费组内当前所有的消费者客户端 ID，主题 topic 的队列可能分布在多个 Broker 上，那请求发往哪个 Broker 呢？ RocketMQ 从主题的路由信息中随机选择一个 Broker。 Broker
                 // 为什么会存在消费组内所有的消费者的信息呢？我们不妨回忆下消费者在启动的时候会向 MQClientInstance 中注册消费者，然后 MQClientInstance 向所有的 Broker 发送心跳包，
                 // 心跳包中包含 MQClientInstance 的消费者信息。如果 mqSet、cidAll 任意一个为空则忽略本消息队列负载
                 List<String> cidAll = this.mQClientFactory.findConsumerIdList(topic, consumerGroup);
@@ -322,6 +326,8 @@ public abstract class RebalanceImpl {
                         allocateResultSet.addAll(allocateResult);
                     }
 
+                    // 对比消息队列是否发生变化，主要思路是遍历当前负载队列集合如果队列不在新分配队列集合中，需要将该队列停止消费并保存消费进度；遍历已分配的队列如果队列不在队列负载表中（processQueueTable）中，则需要创建该队列拉取任务 PullRequest，
+                    // 然后添加到 PullMessageService 线程的 pullRequestQueue 中 PullMessageService 才会继续拉取任务
                     boolean changed = this.updateProcessQueueTableInRebalance(topic, allocateResultSet, isOrder);
                     if (changed) {
                         log.info(
@@ -354,7 +360,7 @@ public abstract class RebalanceImpl {
     }
 
     /**
-     *
+     * 顺序消息消费与并发消息消费的第一个关键区别：顺序消息在创建消息队列拉取任务时需要在 Broker 服务器锁定该消息队列。
      * @param topic
      * @param mqSet
      * @param isOrder
@@ -363,7 +369,7 @@ public abstract class RebalanceImpl {
     private boolean updateProcessQueueTableInRebalance(final String topic, final Set<MessageQueue> mqSet,
         final boolean isOrder) {
         boolean changed = false;
-        // ConcurrentMap<MessageQueue, ProcessQueue> processQueueTable ，当前消费者负载的消息队列缓存表
+        // ConcurrentMap<MessageQueue, ProcessQueue> processQueueTable，当前消费者负载的消息队列缓存表
         Iterator<Entry<MessageQueue, ProcessQueue>> it = this.processQueueTable.entrySet().iterator();
         while (it.hasNext()) {
             Entry<MessageQueue, ProcessQueue> next = it.next();
@@ -372,7 +378,7 @@ public abstract class RebalanceImpl {
 
             if (mq.getTopic().equals(topic)) {
                 if (!mqSet.contains(mq)) {
-                    // 如果缓存表中的 MessageQueue 不包含在 mqSet 中，说明经过本次消息队列负载后，该 mq 被分配给其他消费者，故需要暂停该消息队列消息的消费
+                    // 如果缓存表中的 MessageQueue 不包含在 mqSet 中，说明经过本次消息队列负载后，该 mq 被分配给其他消费者，故需要暂停该消息队列消息的消费，
                     // 方法是将 ProccessQueue 的状态设置为 dropped＝true，该 ProcessQueue 中的消息将不会再被消费
                     pq.setDropped(true);
                     // 调用 removeUnnecessaryMessageQueue 方法判断是否将 MessageQueue、ProccessQueue 从缓存表中移除。主要持久化待移除 MessageQueue 消息消费进度

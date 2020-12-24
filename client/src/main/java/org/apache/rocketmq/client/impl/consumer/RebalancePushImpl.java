@@ -83,9 +83,11 @@ public class RebalancePushImpl extends RebalanceImpl {
 
     @Override
     public boolean removeUnnecessaryMessageQueue(MessageQueue mq, ProcessQueue pq) {
+        // 持久化待移除 MessageQueue 消息消费进度
         this.defaultMQPushConsumerImpl.getOffsetStore().persist(mq);
+        // 移除内存中的消息消费队列消费进度
         this.defaultMQPushConsumerImpl.getOffsetStore().removeOffset(mq);
-        // 如果是集群模式并且是顺序消息消费时，还需要先解锁队列
+        // PUSH 模式下，如果是集群模式并且是顺序消息消费时，还需要先解锁队列
         if (this.defaultMQPushConsumerImpl.isConsumeOrderly()
             && MessageModel.CLUSTERING.equals(this.defaultMQPushConsumerImpl.messageModel())) {
             try {
@@ -139,7 +141,7 @@ public class RebalancePushImpl extends RebalanceImpl {
     }
 
     /**
-     * RocketMQ 提供 CONSUME_FROM_LAST_OFFSET、CONSUME_FROM_FIRST_OFFSET、CONSUME_FROM_TIMESTAMP 方式，在创建消费者时可以通过调用 DefaultMQPushConsumer#setConsumeFromWhere 方法设置
+     * 如果读取到的消费进度小于 0，则需要校对消费进度。RocketMQ 提供 CONSUME_FROM_LAST_OFFSET、CONSUME_FROM_FIRST_OFFSET、CONSUME_FROM_TIMESTAMP 方式，在创建消费者时可以通过调用 DefaultMQPushConsumer#setConsumeFromWhere 方法设置
      * @param mq
      * @return
      */
@@ -152,15 +154,15 @@ public class RebalancePushImpl extends RebalanceImpl {
             case CONSUME_FROM_LAST_OFFSET_AND_FROM_MIN_WHEN_BOOT_FIRST:
             case CONSUME_FROM_MIN_OFFSET:
             case CONSUME_FROM_MAX_OFFSET:
+            // 从队列最新偏移量开始消费
             case CONSUME_FROM_LAST_OFFSET: {
-                // 从队列最新偏移量开始消费
-                // offsetStore.readOffset(mq, ReadOffsetType.READ_FROM_STORE) 返回 -1，表示该消息队列刚创建
+                // 从磁盘上读取到消息队列的消费进度，如果大于0直接返回即可
                 long lastOffset = offsetStore.readOffset(mq, ReadOffsetType.READ_FROM_STORE);
                 if (lastOffset >= 0) {
-                    // 从磁盘上读取到消息队列的消费进度，如果大于0直接返回
                     result = lastOffset;
                 }
                 // First start,no offset
+                // offsetStore.readOffset(mq, ReadOffsetType.READ_FROM_STORE) 返回 -1 表示该消息队列刚创建
                 else if (-1 == lastOffset) {
                     if (mq.getTopic().startsWith(MixAll.RETRY_GROUP_TOPIC_PREFIX)) {
                         result = 0L;

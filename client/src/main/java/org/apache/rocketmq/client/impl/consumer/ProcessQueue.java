@@ -46,7 +46,7 @@ public class ProcessQueue {
     public final static long REBALANCE_LOCK_INTERVAL = Long.parseLong(System.getProperty("rocketmq.client.rebalance.lockInterval", "20000"));
     private final static long PULL_MAX_IDLE_TIME = Long.parseLong(System.getProperty("rocketmq.client.pull.pullMaxIdleTime", "120000"));
     private final InternalLogger log = ClientLogger.getLog();
-    // 读写锁锁，控制多线程并发修改 msgTreeMap、msgTreeMapTemp
+    // 读写锁，控制多线程并发修改 msgTreeMap、msgTreeMapTemp
     private final ReadWriteLock lockTreeMap = new ReentrantReadWriteLock();
     // 消息存储容器，键为消息在 consumeQueue 中的偏移量，MessageExt 为消息实体
     private final TreeMap<Long, MessageExt> msgTreeMap = new TreeMap<Long, MessageExt>();
@@ -73,7 +73,7 @@ public class ProcessQueue {
     private volatile long msgAccCnt = 0;
 
     /**
-     * 判断锁是否过期 ，锁超时时间默认为 30s，可以通过系统参数 rocketmq.client.rebalance.lockMaxLiveTime 来设置
+     * 判断锁是否过期，锁超时时间默认为 30s，可以通过系统参数 rocketmq.client.rebalance.lockMaxLiveTime 来设置
      * @return
      */
     public boolean isLockExpired() {
@@ -143,7 +143,7 @@ public class ProcessQueue {
     }
 
     /**
-     * 添加消息， PullMessageService 拉取消息后，先调用该方法将消息添加到 ProcessQueue
+     * 添加消息，PullMessageService 拉取消息后，先调用该方法将消息添加到 ProcessQueue
      * @param msgs
      * @return
      */

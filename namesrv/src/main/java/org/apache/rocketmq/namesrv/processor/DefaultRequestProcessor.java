@@ -361,7 +361,7 @@ public class DefaultRequestProcessor implements NettyRequestProcessor {
         final GetRouteInfoRequestHeader requestHeader =
             (GetRouteInfoRequestHeader) request.decodeCommandCustomHeader(GetRouteInfoRequestHeader.class);
 
-        // 调用 RouterInfoManager 的方法，从路由 topicQueueTable、brokerAddrTable、filterServerTable 中分别填充 TopicRouteData 中的 List<QueuData＞、 List<BrokerData＞和 filterServer 过滤服务器地址表
+        // 调用 RouterInfoManager 的方法，从路由 topicQueueTable、brokerAddrTable、filterServerTable 中分别填充 TopicRouteData 中的 List<QueueData＞、 List<BrokerData＞和 filterServer 过滤服务器地址表
         TopicRouteData topicRouteData = this.namesrvController.getRouteInfoManager().pickupTopicRouteData(requestHeader.getTopic());
 
         // 如果找到主题对应的路由信息并且该主题为顺序消息，则从 NameServer KVconfig 中获取关于顺序消息相关的配置填充路由信息

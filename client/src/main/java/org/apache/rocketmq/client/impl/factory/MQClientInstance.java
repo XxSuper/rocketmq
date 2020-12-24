@@ -116,6 +116,7 @@ public class MQClientInstance {
     });
     private final ClientRemotingProcessor clientRemotingProcessor;
     private final PullMessageService pullMessageService;
+    // RocketMQ 消息队列重新分布是由 RebalanceService 线程来实现的。一个 MQClientInstance 持有一个 RebalanceService 实现，并随 MQClientInstance 的启动而启动
     private final RebalanceService rebalanceService;
     private final DefaultMQProducer defaultMQProducer;
     private final ConsumerStatsManager consumerStatsManager;
@@ -183,7 +184,7 @@ public class MQClientInstance {
             // 顺序消息配置内容为空
             List<QueueData> qds = route.getQueueDatas();
             Collections.sort(qds);
-            // 循环遍历路由信息的 QueueData 信息，如果队列 没有写权限，则继续遍历下一个 QueueData
+            // 循环遍历路由信息的 QueueData 信息，如果队列没有写权限，则继续遍历下一个 QueueData
             for (QueueData qd : qds) {
                 if (PermName.isWriteable(qd.getPerm())) {
                     BrokerData brokerData = null;
@@ -256,7 +257,7 @@ public class MQClientInstance {
                     this.mQClientAPIImpl.start();
                     // Start various schedule tasks 开启各种定时任务
                     this.startScheduledTask();
-                    // Start pull service 消息拉取线程
+                    // Start pull service 消息拉取线程；RocketMQ 使用一个单独的线程 PullMessageService 来负责消息的拉取
                     this.pullMessageService.start();
                     // Start rebalance service 消息队列重新负载线程
                     this.rebalanceService.start();
@@ -665,13 +666,14 @@ public class MQClientInstance {
                         //  如果 isDefault 为 false ，则使用参数 topic 去查询
                         topicRouteData = this.mQClientAPIImpl.getTopicRouteInfoFromNameServer(topic, 1000 * 3);
                     }
-                    // 如果路由信息找到，与本地缓存中的路由信息进行对比，判断路由信息是否发了改变， 如果未发生变化，则直接返回 false
+                    // 如果路由信息找到，与本地缓存中的路由信息进行对比，判断路由信息是否发了改变，如果未发生变化，则直接返回 false
                     if (topicRouteData != null) {
                         // 本地缓存中的路由信息
                         TopicRouteData old = this.topicRouteTable.get(topic);
                         // NameServer 返回的路由信息与本地缓存中的路由信息进行对比
                         boolean changed = topicRouteDataIsChange(old, topicRouteData);
                         if (!changed) {
+                            // 生产者、消费者本地保存的 topic 是否需要更新
                             changed = this.isNeedUpdateTopicRouteInfo(topic);
                         } else {
                             log.info("the topic[{}] route info changed, old[{}] ,new[{}]", topic, old, topicRouteData);

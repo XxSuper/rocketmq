@@ -419,6 +419,7 @@ public abstract class NettyRemotingAbstract {
 
                     responseTable.remove(opaque);
                     responseFuture.setCause(f.cause());
+                    // 此处进行 countDown()
                     responseFuture.putResponse(null);
                     log.warn("send a request command to channel <" + addr + "> failed.");
                 }

@@ -298,6 +298,7 @@ public class ConsumeMessageOrderlyService implements ConsumeMessageService {
                     log.warn("the message queue consume result is illegal, we think you want to ack these message {}",
                         consumeRequest.getMessageQueue());
                 case SUCCESS:
+                    // 如果消息消费结果为 ConsumeOrderlyStatus.SUCCESS，执行 ProcessQueue 的 commit 方法，并返回待更新的消息消费进度
                     commitOffset = consumeRequest.getProcessQueue().commit();
                     this.getConsumerStatsManager().incConsumeOKTPS(consumerGroup, consumeRequest.getMessageQueue().getTopic(), msgs.size());
                     break;
@@ -572,7 +573,7 @@ public class ConsumeMessageOrderlyService implements ConsumeMessageService {
                                 returnType = ConsumeReturnType.SUCCESS;
                             }
 
-                            // 执行消息消费钩子函数，计算消息消费过程中应用程序抛出异常，钩子函数的后处理逻辑也会被调用
+                            // 执行消息消费钩子函数，即使消息消费过程中应用程序抛出异常，钩子函数的后处理逻辑也会被调用
                             if (ConsumeMessageOrderlyService.this.defaultMQPushConsumerImpl.hasHook()) {
                                 consumeMessageContext.getProps().put(MixAll.CONSUME_CONTEXT_TYPE, returnType.name());
                             }
@@ -591,7 +592,7 @@ public class ConsumeMessageOrderlyService implements ConsumeMessageService {
                             ConsumeMessageOrderlyService.this.getConsumerStatsManager()
                                 .incConsumeRT(ConsumeMessageOrderlyService.this.consumerGroup, messageQueue.getTopic(), consumeRT);
 
-                            // 如果消息消费结果为 ConsumeOrderlyStatus.SUCCESS，执行 ProceeQueue 的 commit 方法，并返回待更新的消息消费进度
+                            // 如果消息消费结果为 ConsumeOrderlyStatus.SUCCESS，执行 ProcessQueue 的 commit 方法，并返回待更新的消息消费进度
                             continueConsume = ConsumeMessageOrderlyService.this.processConsumeResult(msgs, status, context, this);
                         } else {
                             continueConsume = false;

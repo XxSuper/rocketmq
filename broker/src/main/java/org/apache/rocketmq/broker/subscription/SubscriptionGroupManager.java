@@ -118,9 +118,10 @@ public class SubscriptionGroupManager extends ConfigManager {
     }
 
     public SubscriptionGroupConfig findSubscriptionGroupConfig(final String group) {
+        // 获取消费组的订阅配置信息
         SubscriptionGroupConfig subscriptionGroupConfig = this.subscriptionGroupTable.get(group);
         if (null == subscriptionGroupConfig) {
-            // 消费组订阅信息配置信息不存在，如果是自动 brokerConfig 配置了自动创建或者是系统消费组 topic，创建消费组订阅信息配置信息
+            // 消费组订阅信息配置信息不存在，如果 brokerConfig 配置了自动创建或者是系统消费组 topic，创建消费组订阅信息配置信息
             if (brokerController.getBrokerConfig().isAutoCreateSubscriptionGroup() || MixAll.isSysConsumerGroup(group)) {
                 subscriptionGroupConfig = new SubscriptionGroupConfig();
                 subscriptionGroupConfig.setGroupName(group);

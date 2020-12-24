@@ -800,7 +800,7 @@ public class MQClientAPIImpl {
                 RemotingCommand response = responseFuture.getResponseCommand();
                 if (response != null) {
                     try {
-                        // 处理拉取结果
+                        // 处理拉取结果，根据响应结果解码成 PullResultExt 对象，此时只是从网络中读取消息列表到 byte[] messageBinary 属性
                         PullResult pullResult = MQClientAPIImpl.this.processPullResponse(response);
                         assert pullResult != null;
                         // 执行拉取回调
@@ -1149,6 +1149,18 @@ public class MQClientAPIImpl {
         return response.getCode() == ResponseCode.SUCCESS;
     }
 
+    /**
+     * ACK 消息发送的网络客户端入口
+     * @param addr
+     * @param msg
+     * @param consumerGroup
+     * @param delayLevel
+     * @param timeoutMillis
+     * @param maxConsumeRetryTimes
+     * @throws RemotingException
+     * @throws MQBrokerException
+     * @throws InterruptedException
+     */
     public void consumerSendMessageBack(
         final String addr,
         final MessageExt msg,
@@ -1160,13 +1172,21 @@ public class MQClientAPIImpl {
         ConsumerSendMsgBackRequestHeader requestHeader = new ConsumerSendMsgBackRequestHeader();
         RemotingCommand request = RemotingCommand.createRequestCommand(RequestCode.CONSUMER_SEND_MSG_BACK, requestHeader);
 
+        // 消费组名
         requestHeader.setGroup(consumerGroup);
+        // 消息主题
         requestHeader.setOriginTopic(msg.getTopic());
+        // 消息物理偏移量
         requestHeader.setOffset(msg.getCommitLogOffset());
+        // 延迟级别，RcketMQ 不支持精确的定时消息调度，而是提供几个延时级别，MessageStoreConfig#messageDelayLevel = "1s 5s 10s 30s 1m 2m 3m 4m 5m 6m 7m 8m 9m 1Om 20m 30m 1h 2h"，
+        // 如果 delayLevel=1 表示延迟 5s，delayLevel=2 表示延迟 1Os
         requestHeader.setDelayLevel(delayLevel);
+        // 消息 ID
         requestHeader.setOriginMsgId(msg.getMsgId());
+        // 最大重新消费次数，默认为 16
         requestHeader.setMaxReconsumeTimes(maxConsumeRetryTimes);
 
+        // 客户端以同步方式发送 RequestCode.CONSUMER_SEND 到服务端. 服务端命令处理类器：org.apache.rocketmq.broker.processor.SendMessageProcessor#consumerSendMsgBack
         RemotingCommand response = this.remotingClient.invokeSync(MixAll.brokerVIPChannel(this.clientConfig.isVipChannelEnabled(), addr),
             request, timeoutMillis);
         assert response != null;
@@ -1421,7 +1441,7 @@ public class MQClientAPIImpl {
         GetRouteInfoRequestHeader requestHeader = new GetRouteInfoRequestHeader();
         requestHeader.setTopic(topic);
 
-        // 组装请求提体
+        // 组装请求体
         RemotingCommand request = RemotingCommand.createRequestCommand(RequestCode.GET_ROUTEINTO_BY_TOPIC, requestHeader);
 
         // netty 请求 NameServer

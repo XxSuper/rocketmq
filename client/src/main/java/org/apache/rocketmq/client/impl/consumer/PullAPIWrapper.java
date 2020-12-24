@@ -70,15 +70,25 @@ public class PullAPIWrapper {
         this.unitMode = unitMode;
     }
 
+    /**
+     * 消息拉取线程 PullMessageService 默认会使用异步方式从服务器拉取消息，消息消费端会通过 PullAPIWrapper 从响应结果解析出拉取到的消息。
+     * 如果消息过滤模式为 TAG 模式，并且订阅 TAG 集合不为空，则对消息的 tag 进行判断，如果集合中包含消息的 TAG 则返回给消费者消费，否则跳过
+     * @param mq
+     * @param pullResult
+     * @param subscriptionData
+     * @return
+     */
     public PullResult processPullResult(final MessageQueue mq, final PullResult pullResult,
         final SubscriptionData subscriptionData) {
         PullResultExt pullResultExt = (PullResultExt) pullResult;
 
+        // 更新从哪个节点进行 Pull 的缓存区
         this.updatePullFromWhichNode(mq, pullResultExt.getSuggestWhichBrokerId());
         if (PullStatus.FOUND == pullResult.getPullStatus()) {
             ByteBuffer byteBuffer = ByteBuffer.wrap(pullResultExt.getMessageBinary());
             List<MessageExt> msgList = MessageDecoder.decodes(byteBuffer);
 
+            // 对消息进行消息过滤（TAG）模式
             List<MessageExt> msgListFilterAgain = msgList;
             if (!subscriptionData.getTagsSet().isEmpty() && !subscriptionData.isClassFilterMode()) {
                 msgListFilterAgain = new ArrayList<MessageExt>(msgList.size());
@@ -187,6 +197,7 @@ public class PullAPIWrapper {
                 this.recalculatePullFromWhichNode(mq), false);
         // 如果没有获取到 Broker 地址，则从 NameServer 获取
         if (null == findBrokerResult) {
+            // 更新和维护主题路由信息
             this.mQClientFactory.updateTopicRouteInfoFromNameServer(mq.getTopic());
             findBrokerResult =
                 this.mQClientFactory.findBrokerAddressInSubscribe(mq.getBrokerName(),
@@ -204,6 +215,7 @@ public class PullAPIWrapper {
             }
             int sysFlagInner = sysFlag;
 
+            // 如果拉取消息的是slave broker，不进行消息确认
             if (findBrokerResult.isSlave()) {
                 sysFlagInner = PullSysFlag.clearCommitOffsetFlag(sysFlagInner);
             }
@@ -221,7 +233,7 @@ public class PullAPIWrapper {
             requestHeader.setSubVersion(subVersion);
             requestHeader.setExpressionType(expressionType);
 
-            // 如果消息过滤模式为类过滤，则需要根据主题名称、 broker 地址找到注册在 Broker 上的 FilterServer 地址，从 FilterServer 上拉取消息，否则从 Broker 上拉取消息
+            // 如果消息过滤模式为类过滤，则需要根据主题名称、broker 地址找到注册在 Broker 上的 FilterServer 地址，从 FilterServer 上拉取消息，否则从 Broker 上拉取消息
             String brokerAddr = findBrokerResult.getBrokerAddr();
             if (PullSysFlag.hasClassFilterFlag(sysFlagInner)) {
                 brokerAddr = computPullFromWhichFilterServer(mq.getTopic(), brokerAddr);

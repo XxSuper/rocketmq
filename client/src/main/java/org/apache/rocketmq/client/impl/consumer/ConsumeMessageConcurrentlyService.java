@@ -221,7 +221,7 @@ public class ConsumeMessageConcurrentlyService implements ConsumeMessageService 
         final ProcessQueue processQueue,
         final MessageQueue messageQueue,
         final boolean dispatchToConsume) {
-        // 消息批次，在这里看也就是一次消息消费任务 ConsumeRequest 中包含的消息条数，默认为 msgs.size() 默认最多为 32 条，受 DefaultMQPushConsumerImpl.pullBatchSize 属性控制
+        // 消息批次，在这里看也就是一次消息消费任务 ConsumeRequest 中包含的消息条数，默认为 1，msgs.size() 默认最多为 32 条，受 DefaultMQPushConsumerImpl.pullBatchSize 属性控制
         final int consumeBatchSize = this.defaultMQPushConsumer.getConsumeMessageBatchMaxSize();
         if (msgs.size() <= consumeBatchSize) {
             // 如果 msgs.size() 小于 consumeMessageBatchMaxSize，直接将拉取到的消息放入到 ConsumeRequest 中，然后将 consumeRequest 提交到消息消费者线程池中
@@ -271,7 +271,11 @@ public class ConsumeMessageConcurrentlyService implements ConsumeMessageService 
     }
 
     /**
-     * 消息消费结果处理
+     * 消息消费结果处理，消息消费者在消费一批消息后，需要记录该批消息已经消费完毕，否则当消费者重新启动时又得从消息消费队列的开始消费，这显然是不能接受的。
+     * 一次消息消费后会从 processQueue 处理队列中移除该批消息，返回 processQueue 最小偏移量，并存入消息进度表中。那消息进度文件存储在哪合适呢？
+     * 广播模式：同一个消费组的所有消息消费者都需要消费主题下的所有消息，也就是同组内的消费者的消息消费行为是对立的，互相不影响，故消息进度需要独立存储，最理想的存储地方应该是与消费者绑定。
+     * 集群模式：同一个消费组内的所有消息消费者共享消息主题下的所有消息，一条消息（同一个消息消费队列）在同一时间只会被消费组内的一个消费者消费，并且随着消费队列的动态变化重新负载，所以消费进度需要保存在一个每个消费者都能访问到的地方
+     *
      * @param status
      * @param context
      * @param consumeRequest
@@ -281,7 +285,7 @@ public class ConsumeMessageConcurrentlyService implements ConsumeMessageService 
         final ConsumeConcurrentlyContext context,
         final ConsumeRequest consumeRequest
     ) {
-        // 根据消息监听器返回的结果，计算 ackIndex，这是为下文发送 msg back（ACK ）消息做准备的
+        // 根据消息监听器返回的结果，计算 ackIndex，这是为下文发送 msg back（ACK）消息做准备的
         int ackIndex = context.getAckIndex();
 
         if (consumeRequest.getMsgs().isEmpty())
@@ -310,18 +314,19 @@ public class ConsumeMessageConcurrentlyService implements ConsumeMessageService 
 
         switch (this.defaultMQPushConsumer.getMessageModel()) {
             case BROADCASTING:
+                // 如果是广播模式，业务方返回 RECONSUME_LATER，消息并不会重新被消费，只是以警告级别输出到日志文件，
                 for (int i = ackIndex + 1; i < consumeRequest.getMsgs().size(); i++) {
                     MessageExt msg = consumeRequest.getMsgs().get(i);
                     log.warn("BROADCASTING, the message consume failed, drop it, {}", msg.toString());
                 }
                 break;
             case CLUSTERING:
-                // 如果是集群模式，业务方返回 RECONSUME_LATER，消息并不会重新被消费，只是以警告级别输出到日志文件，如果是集群模式，消息消费成功，由于 ackIndex =
-                // consumeRequest.getMsgs().size() - 1，故 i = ackIndex + 1 等于 consumeRequest.getMsgs().size() 并不会执行 sendMessageBack
+                // 如果是集群模式，消息消费成功，由于 ackIndex = consumeRequest.getMsgs().size() - 1，故 i = ackIndex + 1 等于 consumeRequest.getMsgs().size() 并不会执行 sendMessageBack
                 List<MessageExt> msgBackFailed = new ArrayList<MessageExt>(consumeRequest.getMsgs().size());
                 for (int i = ackIndex + 1; i < consumeRequest.getMsgs().size(); i++) {
                     MessageExt msg = consumeRequest.getMsgs().get(i);
                     // 只有在业务方返回 RECONSUME_LATER 时，该批消息都需要发 ACK 消息
+                    // 如果消息监听器返回的消费结果为 RECONSUME LATER，则需要将这些消息发送给 Broker 延迟消息。如果发送 ACK 消息失败，将延迟 5s 后提交线程池进行消费
                     boolean result = this.sendMessageBack(msg, context);
                     if (!result) {
                         // 如果消息发送 ACK 失败，则直接将本批 ACK 消费发送失败的消息再次封装为 ConsumeRequest，然后延迟 5s 后重新消费。如果 ACK 消息发送成功，则该消息会延迟消费
@@ -340,7 +345,7 @@ public class ConsumeMessageConcurrentlyService implements ConsumeMessageService 
                 break;
         }
 
-        // 消息消费完成后，将消息从 ProcessQueue 中移除，同时返回 ProcessQueue 中最小的 offset，使用这个 offset 值更新消费进度，removeMessage 返回的 offset 有两种情况：一是已经没有消息了，返回
+        // 消息消费完成后，将消息从 ProcessQueue 中移除这批消息，同时返回 ProcessQueue 中最小的 offset，使用这个 offset 值更新消费进度，removeMessage 返回的 offset 有两种情况：一是已经没有消息了，返回
         // ProcessQueue 最大 offset + 1，二是还有消息，则返回未消费消息的最小 offset。如果消费者异常退出，会出现重复消费的风险，所以要求消费逻辑幂等
         // 从 ProcessQueue 中移除这些消息，这里返回的偏移量是移除该批消息后最小的偏移量
         long offset = consumeRequest.getProcessQueue().removeMessage(consumeRequest.getMsgs());
@@ -460,6 +465,7 @@ public class ConsumeMessageConcurrentlyService implements ConsumeMessageService 
             boolean hasException = false;
             ConsumeReturnType returnType = ConsumeReturnType.SUCCESS;
             try {
+                // 设置消费开始时间戳
                 if (msgs != null && !msgs.isEmpty()) {
                     for (MessageExt msg : msgs) {
                         MessageAccessor.setConsumeStartTimeStamp(msg, String.valueOf(System.currentTimeMillis()));

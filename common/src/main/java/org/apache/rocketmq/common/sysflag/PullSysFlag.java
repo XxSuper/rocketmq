@@ -24,9 +24,9 @@ public class PullSysFlag {
     private final static int FLAG_COMMIT_OFFSET = 0x1;
     // 表示消息拉取时支持挂起. 0x1 << 1 <--> 1 * 2
     private final static int FLAG_SUSPEND = 0x1 << 1;
-    // 消息过滤机制为表达式，则设置该标记位. 0x1 << 1 <--> 1 * 4
+    // 消息过滤机制为表达式，则设置该标记位. 0x1 << 2 <--> 1 * 2 * 2
     private final static int FLAG_SUBSCRIPTION = 0x1 << 2;
-    // 消息过滤机制为类过滤模式. 0x1 << 1 <--> 1 * 8
+    // 消息过滤机制为类过滤模式. 0x1 << 3 <--> 1 * 2 * 2 * 2
     private final static int FLAG_CLASS_FILTER = 0x1 << 3;
 
     public static int buildSysFlag(final boolean commitOffset, final boolean suspend,

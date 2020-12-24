@@ -82,7 +82,7 @@ public class ExpressionMessageFilter implements MessageFilter {
                 return true;
             }
 
-            // 如果订阅消息的 TAG 是 hashcodes 集合中包含消息的 tagsCode，返回 true
+            // 如果订阅消息的 TAG hashcodes 集合中包含消息的 tagsCode，返回 true
             return subscriptionData.getCodeSet().contains(tagsCode.intValue());
         } else {
             // no expression or no bloom

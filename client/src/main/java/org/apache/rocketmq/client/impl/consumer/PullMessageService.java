@@ -92,11 +92,11 @@ public class PullMessageService extends ServiceThread {
      * @param pullRequest
      */
     private void pullMessage(final PullRequest pullRequest) {
-        // 根据消费组名，从 MQClientInstance 中获取消费者内部实现 MQConsumerInner
+        // 根据消费组名，从 MQClientInstance 中获取消费者内部实现 MQConsumerInner（MQConsumerInner 是在 DefaultMQPushConsumerImpl#start() 中 registerConsumer 到 MQClientInstance 中的）
         final MQConsumerInner consumer = this.mQClientFactory.selectConsumer(pullRequest.getConsumerGroup());
         if (consumer != null) {
-            // 这里将 consumer 强制转换为 DefaultMQPushConsumerlmpl，也就是 PullMessageService，该线程只为 PUSH 模式服务，那拉模式如何拉取消息呢？
-            // PULL 模式 RocketMQ 需要提供拉取消息 API 即可， 具体由应用程序显示调用拉取 API
+            // 这里将 consumer 强制转换为 DefaultMQPushConsumerImpl，也就是 PullMessageService，该线程只为 PUSH 模式服务，那拉模式如何拉取消息呢？
+            // PULL 模式，RocketMQ 需要提供拉取消息 API 即可，具体由应用程序显示调用拉取 API
             DefaultMQPushConsumerImpl impl = (DefaultMQPushConsumerImpl) consumer;
             impl.pullMessage(pullRequest);
         } else {
@@ -105,21 +105,30 @@ public class PullMessageService extends ServiceThread {
     }
 
     /**
+     * PullMessageService 在启动时由于 LinkedBlockingQueue<PullRequest> pullRequestQueue 中没有 PullRequest 对象，故 PullMessageService 线程将阻塞
+     *
+     * 问题一、PullRequest 对象在什么时候创建并加入到 pullRequestQueue 中以便唤醒 PullMessageService 线程
+     * RebalanceService 线程每隔 20s 对消费者订阅的主题进行一次队列重新分配，每一次分配都会获取主题的所有队列、从 Broker 服务器实时查询当前该主题该消费组内消费者列表，
+     * 对新分配的消息队列会创建对应的 pullRequest 对象。在一个 JVM 进程中，同一个消费组同一个队列只会存在一个 PullRequest 对象。
+     *
+     * 问题二、集群内多个消费者是如何负载主题下的多个消费队列，并且如果有新的消费者加入时，消息队列又会如何重新分布
+     * 由于每次进行队列重新负载时会从 Broker 实时查询出当前消费组内所有消费者，并且对消息队列、消费者列表进行排序，这样新加入的消费者就会在队列重新分布时分配到消费队列从而消费消息
+     *
      * PullMessageService 只有在拿到 pullRequest 对象时才会执行拉取任务
      */
     @Override
     public void run() {
         log.info(this.getServiceName() + " service started");
 
-        // 这是一种通用的设计技巧， stopped 声明为 volatile， 每执行一次业务逻辑检测一下其运行状态，可以通过其他线程将 stopped 设置为 true 从而停止该线程
+        // 这是一种通用的设计技巧， stopped 声明为 volatile，每执行一次业务逻辑检测一下其运行状态，可以通过其他线程将 stopped 设置为 true 从而停止该线程
         while (!this.isStopped()) {
             try {
-                // 从 pullRequestQueue 中获取 PullRequest 消息拉取任务，如果 pullRequestQueue 为空，则线程将阻塞，直到有拉取任务被放入
+                // 从 pullRequestQueue 中获取一个 PullRequest 消息拉取任务，如果 pullRequestQueue 为空，则线程将阻塞，直到有拉取任务被放入
                 PullRequest pullRequest = this.pullRequestQueue.take();
-                // 调用 pullMessage 方法进行消息拉取
                 // PullMessageService 提供延迟添加与立即添加2种方式将 PullRequest 放入到 pullRequestQueue 中，PullRequest 是在 PullMessageService#executePullRequestLater#executePullRequestImmediately 中放入的
-                // 通过跟踪发现，主要有两个地方会调用，一个是在 RocketMQ 根据 pullRequest 拉取任务执行完一次消息拉取任务后，又将 pullRequest 对象放入到 pullRequestQueue ，
+                // 通过跟踪发现，主要有两个地方会调用，一个是在 RocketMQ 根据 pullRequest 拉取任务执行完一次消息拉取任务后，又将 pullRequest 对象放入到 pullRequestQueue，
                 // 第二个是在 Rebalancelmpl 中创建。 Rebalancelmpl 消息队列负载机制，也是 PullRequest 对象真正创建的地方。
+                // 调用 pullMessage 方法进行消息拉取
                 this.pullMessage(pullRequest);
             } catch (InterruptedException ignored) {
             } catch (Exception e) {

@@ -595,7 +595,7 @@ public class MappedFile extends ReferenceResource {
      * @return The max position which have valid data
      */
     public int getReadPosition() {
-        // 获取当前文件最大的可读指针。如果 writeBuffer 为空， 直接返回当前的写指针，如果 writeBuffer 不为空，则返回上一次提交的指针，在 MappedFile 设计中，只有提交了的数据（写入到 MappedByteBuffer FileChannel 中的数据 ）才是安全的数据
+        // 获取当前文件最大的可读指针。如果 writeBuffer 为空，直接返回当前的写指针，如果 writeBuffer 不为空，则返回上一次提交的指针，在 MappedFile 设计中，只有提交了的数据（写入到 MappedByteBuffer FileChannel 中的数据 ）才是安全的数据
         return this.writeBuffer == null ? this.wrotePosition.get() : this.committedPosition.get();
     }
 

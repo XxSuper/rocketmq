@@ -78,6 +78,9 @@ public class LocalFileOffsetStore implements OffsetStore {
 
     @Override
     public void load() throws MQClientException {
+        // 通过 readLocalOffset() 读取本地文件中的之前已经存储的消费进度，并添加至成员变量 offsetTable 中
+        // OffsetSerializeWrapper 内部就是 ConcurrentMap<MessageQueue, AtomicLong> offsetTable 数据结构的封装，readLocalOffset 方法首先从 storePath 中尝试加载，如果从该文件
+        // 读取到内容为空，尝试从 storePath ＋ ".bak" 中尝试加载，如果还是未找到，则返回 null
         OffsetSerializeWrapper offsetSerializeWrapper = this.readLocalOffset();
         if (offsetSerializeWrapper != null && offsetSerializeWrapper.getOffsetTable() != null) {
             offsetTable.putAll(offsetSerializeWrapper.getOffsetTable());
@@ -147,8 +150,8 @@ public class LocalFileOffsetStore implements OffsetStore {
     }
 
     /**
-     * 持久化消息进度，就是将 ConcurrentMap<MessageQueue, AtomicLong> offsetTable 序列化到磁盘文件中。
-     * 在 MQClientInstance 中会启动1个定时任务，默认每 5s 持久化一次，可通过 persistConsumerOffsetInterval 设置
+     * 持久化消息消费进度，就是将 ConcurrentMap<MessageQueue, AtomicLong> offsetTable 序列化到磁盘文件中。
+     * 在 MQClientInstance 中会启动 1 个定时任务，默认每 5s 持久化一次，可通过 persistConsumerOffsetInterval 设置
      * @param mqs 消息消费队列集合
      */
     @Override

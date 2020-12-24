@@ -151,7 +151,7 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
             return response;
         }
 
-        // 创建重试主题，重试主题名称 %RETRY%＋消费组名称，，并从重试队列中随机选择一个队列，并构建 TopicConfig 主题配置信息
+        // 创建重试主题，重试主题名称 %RETRY%＋消费组名称，并从重试队列中随机选择一个队列，并构建 TopicConfig 主题配置信息
         String newTopic = MixAll.getRetryTopic(requestHeader.getGroup());
         // 随机选择一个队列
         int queueIdInt = Math.abs(this.random.nextInt() % 99999999) % subscriptionGroupConfig.getRetryQueueNums();
@@ -201,11 +201,12 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
             maxReconsumeTimes = requestHeader.getMaxReconsumeTimes();
         }
 
-        // 如果消息重试次数超过允许的最大重试次数，消息将进入 DLD，主题： %DLQ%＋消费组名
+        // 如果消息已重试次数超过允许的最大重试次数，再次改变 newTopic 主题为 DLQ ("%DLQ%")，消息将进入 DLD，主题： %DLQ%＋消费组名
         if (msgExt.getReconsumeTimes() >= maxReconsumeTimes
             || delayLevel < 0) {
             // 再次改变 newTopic 主题为 DLQ ("%DLQ%")
             newTopic = MixAll.getDLQTopic(requestHeader.getGroup());
+            // 随机选择一个 DLQ 队列
             queueIdInt = Math.abs(this.random.nextInt() % 99999999) % DLQ_NUMS_PER_GROUP;
             // 该主题的权限为只写，说明消息一旦进入到 DLQ 队列中，RocketMQ 将不负责再次调度进行消费了，需要人工干预
             topicConfig = this.brokerController.getTopicConfigManager().createTopicInSendMessageBackMethod(newTopic,
@@ -242,6 +243,7 @@ public class SendMessageProcessor extends AbstractSendMessageProcessor implement
         msgInner.setStoreHost(this.getStoreHost());
         msgInner.setReconsumeTimes(msgExt.getReconsumeTimes() + 1);
 
+        // 将原先的主题、 消息 ID 存入新的消息对象的属性中
         String originMsgId = MessageAccessor.getOriginMessageId(msgExt);
         MessageAccessor.setOriginMessageId(msgInner, UtilAll.isBlank(originMsgId) ? msgExt.getMsgId() : originMsgId);
 

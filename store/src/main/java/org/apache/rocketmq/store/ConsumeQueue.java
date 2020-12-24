@@ -563,9 +563,9 @@ public class ConsumeQueue {
      */
     public SelectMappedBufferResult getIndexBuffer(final long startIndex) {
         int mappedFileSize = this.mappedFileSize;
-        // startIndex * mappedFileSize（20），得到在 consumequeue 中的物理偏移量
+        // startIndex * CQ_STORE_UNIT_SIZE（20），得到在 consumequeue 中的物理偏移量
         long offset = startIndex * CQ_STORE_UNIT_SIZE;
-        // 如果该 offset 小于 minLogicOffset，则返回 null。，说明该消息已被删除。如果大于 minLogicOffset ，则根据偏移量定位到具体的物理文件，然后通过 offset 与物理文件大小
+        // 如果该 offset 小于 minLogicOffset，则返回 null。说明该消息已被删除。如果大于等于 minLogicOffset，则根据偏移量定位到具体的物理文件，然后通过 offset 与物理文件大小
         // 取模获取在该文件的偏移量，从而从偏移量开始连续读取 20 个字节即可
         if (offset >= this.getMinLogicOffset()) {
             MappedFile mappedFile = this.mappedFileQueue.findMappedFileByOffset(offset);

@@ -231,6 +231,7 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
             return;
         }
 
+        // 更新 ProcessQueue 的 lastPullTimestamp 为当前时间戳
         pullRequest.getProcessQueue().setLastPullTimestamp(System.currentTimeMillis());
 
         try {
@@ -249,12 +250,12 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
             return;
         }
 
-        // 进行消息拉取流控，从消息消费数与消费间隔两个维度进行控制
+        // 进行消息拉取流控，从消息消费数量与消费间隔两个维度进行控制
         long cachedMessageCount = processQueue.getMsgCount().get();
         long cachedMessageSizeInMiB = processQueue.getMsgSize().get() / (1024 * 1024);
 
-        // 消息处理总数，如果 processQueue 当前处理的消息条数超过了 pullThresholdForQueue=lOOO 将触发流控，放弃本次拉取任务，并且该队列的下一次拉取任务将在 50 毫秒后
-        // 才加入到拉取任务队列中， 触发 1000 次流控后输出提示语： the cached message count exceeds the threshold {阈值}, so do flow control, minOffset= ｛队列最小偏移｝， maxOffset= ｛队列最大偏移｝， size＝｛消
+        // 消息处理总数，如果 processQueue 当前处理的消息条数超过了 pullThresholdForQueue=1OOO 将触发流控，放弃本次拉取任务，并且该队列的下一次拉取任务将在 50 毫秒后
+        // 才加入到拉取任务队列中，每触发 1000 次流控后输出提示语：the cached message count exceeds the threshold {阈值}, so do flow control, minOffset= ｛队列最小偏移｝， maxOffset= ｛队列最大偏移｝， size＝｛消
         // 息总条数｝, pullRequest= ｛拉取任务｝, flowControlTimes= ｛流控触发次数｝
         if (cachedMessageCount > this.defaultMQPushConsumer.getPullThresholdForQueue()) {
             this.executePullRequestLater(pullRequest, PULL_TIME_DELAY_MILLS_WHEN_FLOW_CONTROL);
@@ -267,8 +268,8 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
         }
 
         // 消息大小，如果 processQueue 当前处理的消息大小超过了 pullThresholdSizeForQueue=1OO 将触发流控，放弃本次拉取任务，并且该队列的下一次拉取任务将在 50 毫秒后
-        // 才加入到拉取任务队列中， 触发 1000 次流控后输出提示语： the cached message count exceeds the threshold {阈值} MiB, so do flow control, minOffset= ｛队列最小偏移｝， maxOffset= ｛队列最大偏移｝， size＝｛消
-        // 息总条数｝, pullRequest= ｛拉取任务｝, flowControlTimes= ｛流控触发次数｝
+        // 才加入到拉取任务队列中，每触发 1000 次流控后输出提示语：
+        // the cached message size exceeds the threshold {阈值} MiB, so do flow control, minOffset={队列最小偏移}, maxOffset={队列最大偏移}, count={消息总条数}, size={消息大小} MiB, pullRequest={拉取任务}, flowControlTimes={流控触发次数}
         if (cachedMessageSizeInMiB > this.defaultMQPushConsumer.getPullThresholdSizeForQueue()) {
             this.executePullRequestLater(pullRequest, PULL_TIME_DELAY_MILLS_WHEN_FLOW_CONTROL);
             if ((queueFlowControlTimes++ % 1000) == 0) {
@@ -279,9 +280,9 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
             return;
         }
 
-        // ProcessQueue 中队列最大偏移量与最小偏离量的间距， 不能超过 consumeConcurrentlyMaxSpan ，否则触发流控，每触发 1000 次输出提示语： the queue's messages, span too long, so do
-        // flow control, minOffset= ｛队列最小偏移量｝， maxOffset= ｛队列最大偏移量｝， maxSpan＝｛间隔｝
-        // pullRequest= ｛拉取任务信息｝， flowControlTimes＝｛流控触发次数｝ 这里主要的考量是担心一条消息堵塞，消息进度无法向前推进，可能造成大量消息重复消费，一直往队列中塞入数据没有取值
+        // ProcessQueue 中队列最大偏移量与最小偏离量的间距，不能超过 consumeConcurrentlyMaxSpan，否则触发流控，每触发 1000 次流控输出提示语：
+        // the queue's messages, span too long, so do flow control, minOffset={队列最小偏移量}, maxOffset={队列最大偏移量}, maxSpan={间隔}, pullRequest={拉取任务信息}, flowControlTimes={流控触发次数}。
+        // 这里主要的考量是担心一条消息堵塞，消息进度无法向前推进，可能造成大量消息重复消费，一直往队列中塞入数据没有取值
         if (!this.consumeOrderly) {
             if (processQueue.getMaxSpan() > this.defaultMQPushConsumer.getConsumeConcurrentlyMaxSpan()) {
                 this.executePullRequestLater(pullRequest, PULL_TIME_DELAY_MILLS_WHEN_FLOW_CONTROL);
@@ -317,7 +318,7 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
             }
         }
 
-        // 拉取该主题订阅信息，如果为空，结束本次消息拉取，关于该队列的下一次拉取任务延迟 3s
+        // 拉取该主题订阅信息，如果为空，结束本次消息拉取，关于该队列的下一次拉取任务延迟 3s。订阅信息在 DefaultMQPushConsumerImpl 启动时 copySubscription() 赋值
         final SubscriptionData subscriptionData = this.rebalanceImpl.getSubscriptionInner().get(pullRequest.getMessageQueue().getTopic());
         if (null == subscriptionData) {
             this.executePullRequestLater(pullRequest, pullTimeDelayMillsWhenException);
@@ -337,8 +338,9 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
 
                     switch (pullResult.getPullStatus()) {
                         case FOUND:
-                            // 更新 pullRequest 的下一次拉取偏移量
+                            // 上一次消息拉取的偏移量
                             long prevRequestOffset = pullRequest.getNextOffset();
+                            // 更新 pullRequest 的下一次拉取偏移量
                             pullRequest.setNextOffset(pullResult.getNextBeginOffset());
                             long pullRT = System.currentTimeMillis() - beginTimestamp;
                             DefaultMQPushConsumerImpl.this.getConsumerStatsManager().incPullRT(pullRequest.getConsumerGroup(),
@@ -351,8 +353,10 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
                             if (pullResult.getMsgFoundList() == null || pullResult.getMsgFoundList().isEmpty()) {
                                 DefaultMQPushConsumerImpl.this.executePullRequestImmediately(pullRequest);
                             } else {
+                                // 第一个消息的偏移量
                                 firstMsgOffset = pullResult.getMsgFoundList().get(0).getQueueOffset();
 
+                                // 统计拉取的消息大小
                                 DefaultMQPushConsumerImpl.this.getConsumerStatsManager().incPullTPS(pullRequest.getConsumerGroup(),
                                     pullRequest.getMessageQueue().getTopic(), pullResult.getMsgFoundList().size());
 
@@ -366,7 +370,7 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
                                     pullRequest.getMessageQueue(),
                                     dispatchToConsume);
 
-                                // 将消息提交给消费者线程之后 PullCallBack 即返回，可以说本次消息拉取顺利完成，然后根据 pullInterval 参数，如果 pullInterval>0 ，则等待 pulllnterval 毫秒后将
+                                // 将消息提交给消费者线程之后 PullCallBack 将立即返回，可以说本次消息拉取顺利完成，然后根据 pullInterval 参数，如果 pullInterval>0，则等待 pulllnterval 毫秒后将
                                 // PullRequest 对象放入到 PullMessageService 的 pullRequestQueue 中，该消息队列的下次拉取即将被激活，达到持续消息拉取，实现准实时拉取消息的效果
                                 if (DefaultMQPushConsumerImpl.this.defaultMQPushConsumer.getPullInterval() > 0) {
                                     DefaultMQPushConsumerImpl.this.executePullRequestLater(pullRequest,
@@ -398,7 +402,7 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
                             DefaultMQPushConsumerImpl.this.executePullRequestImmediately(pullRequest);
                             break;
                         case NO_MATCHED_MSG:// 没有匹配消息
-                            // 直接使用服务器端校正的偏移 进行下一次消息的拉取
+                            // 直接使用服务器端校正的偏移量进行下一次消息的拉取
                             pullRequest.setNextOffset(pullResult.getNextBeginOffset());
 
                             DefaultMQPushConsumerImpl.this.correctTagsOffset(pullRequest);
@@ -407,9 +411,9 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
                             break;
                         case OFFSET_ILLEGAL:
                             // 如果拉取结果显示偏移量非法，首先将 ProcessQueue 设置 dropped 为 true，表示丢弃该消费队列，意味着 ProcessQueue 中拉取的消息将停止消费，
-                            // 然后根据服务端下一次校对的偏移量尝试更新消息消费进度（ 内存中 ），然后尝试持久化消息消费进度，并将该消息队列从 Rebalancelmpl 的处理队列中移除，
+                            // 然后根据服务端下一次校对的偏移量尝试更新消息消费进度（ 内存中 ），然后尝试持久化消息消费进度，并将该消息队列从 RebalanceImpl 的处理队列中移除，
                             // 意味着暂停该消息队列的消息拉取，等待下一次消息队列重新负载。OFFSET_ILLEGAL 对应服务端 GetMessageResult 状态的 NO_MATCHED_LOGIC_QUEUE、
-                            // NO_MESSAGE_IN_QUEUE、OFFSET_OVERFLOW_BADLY、OFFSET_TOO_SMALL 中，这些状态服务端偏移量校正基本上使用原 offset ，在客户端更新消息消费进度时
+                            // NO_MESSAGE_IN_QUEUE、OFFSET_OVERFLOW_BADLY、OFFSET_TOO_SMALL 中，这些状态服务端偏移量校正基本上使用原 offset，在客户端更新消息消费进度时
                             // 只有当消息进度比当前消费进度大才会覆盖，保证消息进度的准确性
                             log.warn("the pull request offset illegal, {} {}",
                                 pullRequest.toString(), pullResult.toString());
@@ -421,11 +425,14 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
                                 @Override
                                 public void run() {
                                     try {
+                                        // 更新消息消费进度（ 内存中 ）
                                         DefaultMQPushConsumerImpl.this.offsetStore.updateOffset(pullRequest.getMessageQueue(),
                                             pullRequest.getNextOffset(), false);
 
+                                        // 尝试持久化消息消费进度
                                         DefaultMQPushConsumerImpl.this.offsetStore.persist(pullRequest.getMessageQueue());
 
+                                        // 将该消息队列从 RebalanceImpl 的处理队列中移除
                                         DefaultMQPushConsumerImpl.this.rebalanceImpl.removeProcessQueue(pullRequest.getMessageQueue());
 
                                         log.warn("fix the pull request offset, {}", pullRequest);
@@ -455,7 +462,7 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
         boolean commitOffsetEnable = false;
         long commitOffsetValue = 0L;
         if (MessageModel.CLUSTERING == this.defaultMQPushConsumer.getMessageModel()) {
-            // 集群模式
+            // 集群模式，获取消息消费进度偏移量
             commitOffsetValue = this.offsetStore.readOffset(pullRequest.getMessageQueue(), ReadOffsetType.READ_FROM_MEMORY);
             if (commitOffsetValue > 0) {
                 commitOffsetEnable = true;
@@ -466,8 +473,10 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
         String subExpression = null;
         // 是否是类过滤模式
         boolean classFilter = false;
+        // 获取主题的订阅信息
         SubscriptionData sd = this.rebalanceImpl.getSubscriptionInner().get(pullRequest.getMessageQueue().getTopic());
         if (sd != null) {
+            // postSubscriptionWhenPull 是否每次拉取消息都更新订阅信息
             if (this.defaultMQPushConsumer.isPostSubscriptionWhenPull() && !sd.isClassFilterMode()) {
                 subExpression = sd.getSubString();
             }
@@ -633,6 +642,7 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
     }
 
     /**
+     * 整个方法加同步锁
      * 每一个消费组内维护一个线程池来消费消息，消息队列负载，通常的做法是一个消息队列在同一时间只允许被一个消息消费者消费，一个消息消费者可以同时消费多个消息队列
      * @throws MQClientException
      */
@@ -643,18 +653,20 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
                     this.defaultMQPushConsumer.getMessageModel(), this.defaultMQPushConsumer.isUnitMode());
                 this.serviceState = ServiceState.START_FAILED;
 
-                // 检查配置
+                // 检查配置，确认 consumer 的配置是否合法，比如消费者组名，消息模式，是否顺序消费，消息队列分配策略等
                 this.checkConfig();
-                // 构建订阅信息
+                // 构建订阅信息，将 DefaultPushConsumer 的订阅信息构造成 SubscriptionData 复制到 RebalancePushImpl 的 subscriptionInner 中
                 this.copySubscription();
 
                 if (this.defaultMQPushConsumer.getMessageModel() == MessageModel.CLUSTERING) {
+                    // 如果 instanceName 为默认值 DEFAULT 的话，RocketMQ 会自动将 instanceName 设置为进程 ID
                     this.defaultMQPushConsumer.changeInstanceNameToPID();
                 }
-                // 初始化 MQClientInstance、Rebalancelmpl （消息重新负载实现类）等
+                // 初始化 MQClientInstance、RebalanceImpl（消息重新负载实现类）等
                 // 此处创建 MQClientInstance 实例以及 MQClientAPIImpl（用于网络通信，内置了很多处理器）实例
                 this.mQClientFactory = MQClientManager.getInstance().getOrCreateMQClientInstance(this.defaultMQPushConsumer, this.rpcHook);
 
+                // 配置 rebalanceImpl
                 // 设置消费者组
                 this.rebalanceImpl.setConsumerGroup(this.defaultMQPushConsumer.getConsumerGroup());
                 // 设置消费模式
@@ -664,12 +676,13 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
                 // 设置客户端实例
                 this.rebalanceImpl.setmQClientFactory(this.mQClientFactory);
 
+                // 构造 pullAPIWrapper 实例并给其注册 FilterMessageHook
                 this.pullAPIWrapper = new PullAPIWrapper(
                     mQClientFactory,
                     this.defaultMQPushConsumer.getConsumerGroup(), isUnitMode());
                 this.pullAPIWrapper.registerFilterMessageHook(filterMessageHookList);
 
-                // 初始化消息进度
+                // 初始化消息进度，根据消费者的消息模式，选择不同的方式存储消费进度
                 if (this.defaultMQPushConsumer.getOffsetStore() != null) {
                     this.offsetStore = this.defaultMQPushConsumer.getOffsetStore();
                 } else {
@@ -679,7 +692,7 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
                             this.offsetStore = new LocalFileOffsetStore(this.mQClientFactory, this.defaultMQPushConsumer.getConsumerGroup());
                             break;
                         case CLUSTERING:
-                            // 如果消息消费是集群模式，=那么消息进度保存在 Broker 上
+                            // 如果消息消费是集群模式，那么消息进度保存在 Broker 上
                             this.offsetStore = new RemoteBrokerOffsetStore(this.mQClientFactory, this.defaultMQPushConsumer.getConsumerGroup());
                             break;
                         default:
@@ -699,10 +712,10 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
                     this.consumeMessageService =
                         new ConsumeMessageConcurrentlyService(this, (MessageListenerConcurrently) this.getMessageListenerInner());
                 }
-                // 启动线程池
+                // 启动线程池；非顺序的启动仅仅启动了定时清理过期消息的任务
                 this.consumeMessageService.start();
 
-                // 向 MQClientInstance 注册消费者，并启动 MQClientInstance， 在一个 JNM 中的所有消费者、生产者持有同一个 MQClientInstance, MQClientInstance 只会启动一次
+                // 向 MQClientInstance 注册消费者，并启动 MQClientInstance，在一个 JVM 中的所有消费者、生产者持有同一个 MQClientInstance, MQClientInstance 只会启动一次
                 boolean registerOK = mQClientFactory.registerConsumer(this.defaultMQPushConsumer.getConsumerGroup(), this);
                 if (!registerOK) {
                     this.serviceState = ServiceState.CREATE_JUST;
@@ -915,9 +928,9 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
                     final String topic = entry.getKey();
                     // 过滤表达式
                     final String subString = entry.getValue();
-                    // 构建主题订阅信息 SubscriptionData 并加入到 Rebalancelmpl 的订阅消息中。订阅关系来源主要有两个。
-                    // 1、通过调用 DefaultMQPushConsumerlmpl#subscribe（ String topic, String subExpression) 方法
-                    // 2、订阅重试主题消息。从这里可以看出， RocketMQ 消息重试是以消费组为单位，而不是主题，消息重试主题名为 %RETRY%＋消费组名。消费者在启动的时候会自动订阅该
+                    // 构建主题订阅信息 SubscriptionData 并加入到 RebalanceImpl 的订阅消息中。订阅关系来源主要有两个。
+                    // 1、通过调用 DefaultMQPushConsumerImpl#subscribe（ String topic, String subExpression) 方法
+                    // 2、订阅重试主题消息。从这里可以看出，RocketMQ 消息重试是以消费组为单位，而不是主题，消息重试主题名为 %RETRY%＋消费组名。消费者在启动的时候会自动订阅该
                     // 主题，参与该主题的消息队列负载
                     SubscriptionData subscriptionData = FilterAPI.buildSubscriptionData(this.defaultMQPushConsumer.getConsumerGroup(),
                         topic, subString);
@@ -968,7 +981,7 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
     }
 
     /**
-     * 消费者订阅消息主题与消息过滤表达式。构建订阅信息并加入到 RebalanceImpl 中，以便 Rebalancelmpl 进行消息队列负载
+     * 消费者订阅消息主题与消息过滤表达式。构建订阅信息并加入到 RebalanceImpl 中，以便 RebalanceImpl 进行消息队列负载
      * @param topic
      * @param subExpression
      * @throws MQClientException
@@ -1249,7 +1262,7 @@ public class DefaultMQPushConsumerImpl implements MQConsumerInner {
     }
 
     /**
-     * 遍历消息集合，找出属性为 RETRY_TOPIC 重投的消息， 设置该消息的 topic
+     * 遍历消息集合，找出属性为 RETRY_TOPIC 重投的消息，设置该消息的 topic
      * @param msgs
      * @param consumerGroup
      */
