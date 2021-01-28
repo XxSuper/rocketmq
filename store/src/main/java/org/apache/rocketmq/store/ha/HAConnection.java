@@ -190,6 +190,7 @@ public class HAConnection {
                     int readSize = this.socketChannel.read(this.byteBufferRead);
                     if (readSize > 0) {
                         readSizeZeroTimes = 0;
+                        // 最后一次读数据时间
                         this.lastReadTimestamp = HAConnection.this.haService.getDefaultMessageStore().getSystemClock().now();
                         // 如果读取的字节大于 0 并且本次读取到的内容大于等于 8，表明收到了从服务器一条拉取消息的请求
                         if ((this.byteBufferRead.position() - this.processPosition) >= 8) {
@@ -230,7 +231,7 @@ public class HAConnection {
     }
 
     /**
-     * HA Master 网络读实现类
+     * HA Master 网络写实现类
      * 网络写请求由内部 WriteSocketService 线程来实现
      */
     class WriteSocketService extends ServiceThread {
@@ -272,9 +273,9 @@ public class HAConnection {
                         continue;
                     }
 
-                    // 如果 nextTransferFromWhere（下一次传输的物理偏移量）为 -1，表示初次进行数据传输，计算待传输的物理偏移量，
+                    // 如果 nextTransferFromWhere（下一次传输的物理偏移量）为 -1，表示初次进行数据传输，计算待传输的物理偏移量
                     if (-1 == this.nextTransferFromWhere) {
-                        // 如果 slaveRequestOffset（从服务器请求拉取数据的偏移量）为 0，则从当前 commitlog 文件最大偏移量开始传输，
+                        // 如果 slaveRequestOffset（从服务器请求拉取数据的偏移量）为 0，则从当前 commitlog 文件最大偏移量开始传输
                         if (0 == HAConnection.this.slaveRequestOffset) {
                             long masterOffset = HAConnection.this.haService.getDefaultMessageStore().getCommitLog().getMaxOffset();
                             masterOffset =
@@ -296,7 +297,7 @@ public class HAConnection {
                             + "], and slave request " + HAConnection.this.slaveRequestOffset);
                     }
 
-                    // 判断上次写事件是否已将信息全部写人客户端
+                    // 判断上次写事件是否已将信息全部写入客户端
                     if (this.lastWriteOver) {
                         // 如果已全部写入，且当前系统时间与上次最后写入的时间间隔大于 HA 心跳检测时间，则发送一个心跳包
                         long interval =

@@ -99,7 +99,7 @@ public class HAService {
 
     /**
      * 该方法在 Master 收到从服务器的拉取请求后被调用，表示从服务器当前已同步的偏移量，既然收到从服务器的反馈信息，需要唤醒某些消息发送者线程。如果从从服务器中
-     * 收到的确认偏移量大于 push2SlaveMaxOffsset，则更新 push2SlaveMaxOffset ，然后唤醒 GroupTransferService 线程，各消息发送者线程再次判断
+     * 收到的确认偏移量大于 push2SlaveMaxOffsset，则更新 push2SlaveMaxOffset，然后唤醒 GroupTransferService 线程，各消息发送者线程再次判断
      * 自己本次发送的消息是否已经成功复制到从服务器
      * @param offset
      */
@@ -109,6 +109,7 @@ public class HAService {
             boolean ok = this.push2SlaveMaxOffset.compareAndSet(value, offset);
             if (ok) {
                 // 唤醒 GroupTransferService 线程（线程在 doWaitTransfer() 方法中等待）
+                // GroupTransferService 线程再调用 CommitLog.GroupCommitRequest.wakeupCustomer(transferOK) 唤醒消息发送者线程
                 this.groupTransferService.notifyTransferSome();
                 break;
             } else {
@@ -125,6 +126,14 @@ public class HAService {
     // this.groupTransferService.notifyTransferSome();
     // }
 
+    /**
+     * 主服务器启动，并在特定端口上监听从服务器的连接
+     * 从服务器主动连接主服务器，主服务器接收客户端的连接，并建立相关 TCP 连接
+     * 从服务器主动向主服务器发送待拉取消息偏移量，主服务器解析请求并返回消息给从服务器
+     * 从服务器保存消息并继续发送新的消息同步请求
+     *
+     * @throws Exception
+     */
     public void start() throws Exception {
         this.acceptSocketService.beginAccept();
         this.acceptSocketService.start();
@@ -196,11 +205,18 @@ public class HAService {
          * @throws Exception If fails.
          */
         public void beginAccept() throws Exception {
+            // 创建 ServerSocketChannel
             this.serverSocketChannel = ServerSocketChannel.open();
+            // 创建 Selector
             this.selector = RemotingUtil.openSelector();
+            // 设置 TCP reuseAddress
+            // 为了确保一个进程被关闭后，即使它还没有释放该端口，同一个主机上的其他进程还可以立刻重用该端口，可以调用 socket().setReuseAddress(true) 方法
             this.serverSocketChannel.socket().setReuseAddress(true);
+            // 绑定监听端口
             this.serverSocketChannel.socket().bind(this.socketAddressListen);
+            // 设置为非阻塞模式
             this.serverSocketChannel.configureBlocking(false);
+            // 注册 OP_ACCEPT（连接事件）
             this.serverSocketChannel.register(this.selector, SelectionKey.OP_ACCEPT);
         }
 
@@ -219,6 +235,7 @@ public class HAService {
         }
 
         /**
+         * 该方法是标准的基于 NIO 的服务端程式实例
          * {@inheritDoc}
          */
         @Override
@@ -279,7 +296,7 @@ public class HAService {
      * 主从同步通知实现类
      *
      * GroupTransferService 主从同步阻塞实现，如果是主从同步模式，消息发送者将消息刷写到磁盘后，需要继续等待新数据被传输到从服务器，从服务器数据的复制是在另外一个线程 HAConnection 中去拉取，
-     * 所以消息发送者在这里需要等待数据传输的结果，GroupTransferService 是实现该功能，该类的整体结构与同步刷盘实现类（ CommitLog$GroupCommitService）类似，核心业务逻辑 doWaitTransfer 的实现
+     * 所以消息发送者在这里需要等待数据传输的结果，GroupTransferService 就是实现该功能，该类的整体结构与同步刷盘实现类（ CommitLog$GroupCommitService）类似，核心业务逻辑 doWaitTransfer 的实现
      *
      * GroupTransferService Service
      */
@@ -326,7 +343,7 @@ public class HAService {
                             + HAService.this.defaultMessageStore.getMessageStoreConfig().getSyncFlushTimeout();
                         while (!transferOK && HAService.this.defaultMessageStore.getSystemClock().now() < waitUntilWhen) {
                             // 等待 1s 再次判断
-                            // 等待被唤醒或者超时
+                            // 等待被唤醒或者超时，HAConnection.this.haService.notifyTransferSome(HAConnection.this.slaveAckOffset) 会进行唤醒
                             this.notifyTransferObject.waitForRunning(1000);
                             transferOK = HAService.this.push2SlaveMaxOffset.get() >= req.getNextOffset();
                         }
@@ -335,7 +352,7 @@ public class HAService {
                             log.warn("transfer messsage to slave timeout, " + req.getNextOffset());
                         }
                         // 唤醒消息发送线程
-                        // 唤醒 GroupCommitRequest 的 CountDownLatch
+                        // 唤醒 GroupCommitRequest 的 CountDownLatch，唤醒消息发送者等待线程
                         req.wakeupCustomer(transferOK);
                     }
 
@@ -373,7 +390,7 @@ public class HAService {
 
     /**
      * HA Client 是主从同步 Slave 端的核心实现类
-     * HA Client 实现类
+     * HA Client 端实现类
      */
     class HAClient extends ServiceThread {
         // Socket 读缓存区大小
@@ -395,7 +412,7 @@ public class HAService {
         private int dispatchPosition = 0;
         // 读缓存区，大小为 4M
         private ByteBuffer byteBufferRead = ByteBuffer.allocate(READ_MAX_BUFFER_SIZE);
-        // 读缓存区备份，与 BufferRead 进行交换
+        // 读缓存区备份，与 byteBufferRead 进行交换
         private ByteBuffer byteBufferBackup = ByteBuffer.allocate(READ_MAX_BUFFER_SIZE);
 
         public HAClient() throws IOException {
@@ -411,7 +428,7 @@ public class HAService {
         }
 
         /**
-         * 判断是否需要向 Master 反馈当前待拉取偏移量，Master 与 Slave 的 HA 心跳发送间隔默认为 5s，可通过配置 haSendHeartbeatlnterval 来改变心跳间隔
+         * 判断是否需要向 Master 反馈当前待拉取偏移量，Master 与 Slave 的 HA 心跳发送间隔默认为 5s，可通过配置 haSendHeartbeatInterval 来改变心跳间隔
          * @return
          */
         private boolean isTimeToReportOffset() {
@@ -426,7 +443,7 @@ public class HAService {
         }
 
         /**
-         * 向 Master 服务器反馈拉取偏移量。这里有两重意义，对于 Slave 端来说是发送下次待拉取消息偏移量，而对于 Master 服务端来说，
+         * 向 Master 服务器反馈拉取偏移量。这里有两重意义，对于 Slave 端来说，是发送下次待拉取消息偏移量，而对于 Master 服务端来说，
          * 既可以认为是 Slave 本次请求拉取的消息偏移量，也可以理解为 Slave 的消息同步 ACK 确认消息
          *
          * 这里 RocketMQ 作者提供了一个基于 NIO 的网络写示例程序：首先先将 ByteBuffer 的 position 设置为 0, limit 设置为待写入字节长度 然后调用 putLong 将待拉取偏移量写入
@@ -521,7 +538,7 @@ public class HAService {
         }
 
         /**
-         * 读取 Master 传输的 CommitLog数据，并返回是否异常，如果读取到数据，写入 CommitLog
+         * 读取 Master 传输的 CommitLog 数据，并返回是否异常，如果读取到数据，写入 CommitLog
          * 异常原因：
          * 1、Master 传输来的数据 offset 不等于 Slave 的 CommitLog 数据最大 offset
          * 2、上报到 Master 进度失败
@@ -613,11 +630,12 @@ public class HAService {
                 // 如果 master 地址为空，返回 false
                 String addr = this.masterAddress.get();
                 if (addr != null) {
-                    // 如果 master 地址不为空，则建立到 Master 的 TCP 连接，然后注册 OP_READ（网络读事件），
+                    // 如果 master 地址不为空，则建立到 Master 的 TCP 连接，然后注册 OP_READ（网络读事件）
                     SocketAddress socketAddress = RemotingUtil.string2SocketAddress(addr);
                     if (socketAddress != null) {
                         this.socketChannel = RemotingUtil.connect(socketAddress);
                         if (this.socketChannel != null) {
+                            // 注册 OP_READ（网络读事件）
                             this.socketChannel.register(this.selector, SelectionKey.OP_READ);
                         }
                     }
@@ -664,9 +682,9 @@ public class HAService {
             // 是否停止循环
             while (!this.isStopped()) {
                 try {
-                    // 是否到连接 master
+                    // 是否连接到 master 服务器
                     if (this.connectMaster()) {
-                        // 是否发送心跳
+                        // 是否发送心跳，反馈待拉取偏移量
                         if (this.isTimeToReportOffset()) {
                             // 向 Master 服务器反馈拉取偏移量
                             boolean result = this.reportSlaveMaxOffset(this.currentReportedOffset);

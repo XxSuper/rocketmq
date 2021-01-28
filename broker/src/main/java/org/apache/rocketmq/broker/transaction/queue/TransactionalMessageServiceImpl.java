@@ -142,6 +142,7 @@ public class TransactionalMessageServiceImpl implements TransactionalMessageServ
                 // 根据事务消息消费队列获取与之对应的消息队列，其实就是获取已处理消息的消息消费队列，其主题为 RMQ_SYS_TRANS_OP_HALF_TOPIC
                 long startTime = System.currentTimeMillis();
                 MessageQueue opQueue = getOpQueue(messageQueue);
+                // 获取消息消费进度
                 long halfOffset = transactionalMessageBridge.fetchConsumeOffset(messageQueue);
                 long opOffset = transactionalMessageBridge.fetchConsumeOffset(opQueue);
                 log.info("Before check, the queue={} msgOffset={} opOffset={}", messageQueue, halfOffset, opOffset);
@@ -183,7 +184,7 @@ public class TransactionalMessageServiceImpl implements TransactionalMessageServ
                         Long removedOpOffset = removeMap.remove(i);
                         doneOpOffset.add(removedOpOffset);
                     } else {
-                        // 根据消息队列偏移量 i，从消费队列中获取消息
+                        // 根据消息队列、偏移量 i，从消费队列中获取消息
                         GetResult getResult = getHalfMsg(messageQueue, i);
                         MessageExt msgExt = getResult.getMsg();
                         if (msgExt == null) {
@@ -275,7 +276,7 @@ public class TransactionalMessageServiceImpl implements TransactionalMessageServ
                     i++;
                 }
                 if (newOffset != halfOffset) {
-                    // 保存（ Prepare ）消息队列的回查进度
+                    // 保存（Prepare）消息队列的回查进度
                     transactionalMessageBridge.updateConsumeOffset(messageQueue, newOffset);
                 }
                 long newOpOffset = calculateOpOffset(doneOpOffset, opOffset);
@@ -315,6 +316,7 @@ public class TransactionalMessageServiceImpl implements TransactionalMessageServ
      */
     private PullResult fillOpRemoveMap(HashMap<Long, Long> removeMap,
         MessageQueue opQueue, long pullOffsetOfOp, long miniOffset, List<Long> doneOpOffset) {
+        // 从 RMQ_SYS_TRANS_OP_HALF_TOPIC 主题队列中拉取 32 条消息
         PullResult pullResult = pullOpMsg(opQueue, pullOffsetOfOp, 32);
         if (null == pullResult) {
             return null;
@@ -323,6 +325,7 @@ public class TransactionalMessageServiceImpl implements TransactionalMessageServ
             || pullResult.getPullStatus() == PullStatus.NO_MATCHED_MSG) {
             log.warn("The miss op offset={} in queue={} is illegal, pullResult={}", pullOffsetOfOp, opQueue,
                 pullResult);
+            // 如果拉取结果为 PullStatus.OFFSET_ILLEGAL、PullStatus.NO_MATCHED_MSG 则更新消息消费进度为 pullResult.getNextBeginOffset()
             transactionalMessageBridge.updateConsumeOffset(opQueue, pullResult.getNextBeginOffset());
             return pullResult;
         } else if (pullResult.getPullStatus() == PullStatus.NO_NEW_MSG) {
@@ -515,6 +518,7 @@ public class TransactionalMessageServiceImpl implements TransactionalMessageServ
 
     @Override
     public OperationResult commitMessage(EndTransactionRequestHeader requestHeader) {
+        // 从结束事务请求命令中获取消息的物理偏移量
         return getHalfMessageByOffset(requestHeader.getCommitLogOffset());
     }
 

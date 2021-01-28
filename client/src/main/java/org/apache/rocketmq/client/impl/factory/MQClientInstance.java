@@ -1106,8 +1106,7 @@ public class MQClientInstance {
         boolean slave = false;
         boolean found = false;
 
-        // 从 ConcurrentMap<String/* Broker Name */, HashMap<Long/* brokerId */, String/* address */>> brokerAddrTable 地址缓存表中
-        // 根据 brokerName 获取所有的 Broker 信息
+        // 从 ConcurrentMap<String/* Broker Name */, HashMap<Long/* brokerId */, String/* address */>> brokerAddrTable 地址缓存表中根据 brokerName 获取所有的 Broker 信息
         HashMap<Long/* brokerId */, String/* address */> map = this.brokerAddrTable.get(brokerName);
         if (map != null && !map.isEmpty()) {
             // 根据 brokerId 从 Broker 主从缓存表中获取指定 Broker 地址，如果根据 brokerId 未找到相关的条目，此时若 onlyThisBroker 为 false，

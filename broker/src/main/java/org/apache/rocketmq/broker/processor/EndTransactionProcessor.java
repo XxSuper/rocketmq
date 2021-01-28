@@ -171,18 +171,21 @@ public class EndTransactionProcessor implements NettyRequestProcessor {
         final RemotingCommand response = RemotingCommand.createResponseCommand(null);
         if (msgExt != null) {
             final String pgroupRead = msgExt.getProperty(MessageConst.PROPERTY_PRODUCER_GROUP);
+            // 生产者所属组是否一致
             if (!pgroupRead.equals(requestHeader.getProducerGroup())) {
                 response.setCode(ResponseCode.SYSTEM_ERROR);
                 response.setRemark("The producer group wrong");
                 return response;
             }
 
+            // 消息消费队列偏移量是否一致
             if (msgExt.getQueueOffset() != requestHeader.getTranStateTableOffset()) {
                 response.setCode(ResponseCode.SYSTEM_ERROR);
                 response.setRemark("The transaction state table offset wrong");
                 return response;
             }
 
+            // 消息物理偏移量是否一致
             if (msgExt.getCommitLogOffset() != requestHeader.getCommitLogOffset()) {
                 response.setCode(ResponseCode.SYSTEM_ERROR);
                 response.setRemark("The commit log offset wrong");
@@ -198,6 +201,7 @@ public class EndTransactionProcessor implements NettyRequestProcessor {
     }
 
     private MessageExtBrokerInner endMessageTransaction(MessageExt msgExt) {
+        // 恢复消息的主题、消费队列，构建新的消息对象
         MessageExtBrokerInner msgInner = new MessageExtBrokerInner();
         msgInner.setTopic(msgExt.getUserProperty(MessageConst.PROPERTY_REAL_TOPIC));
         msgInner.setQueueId(Integer.parseInt(msgExt.getUserProperty(MessageConst.PROPERTY_REAL_QUEUE_ID)));

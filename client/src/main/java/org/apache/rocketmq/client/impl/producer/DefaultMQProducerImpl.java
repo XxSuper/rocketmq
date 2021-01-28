@@ -1271,11 +1271,12 @@ public class DefaultMQProducerImpl implements MQProducerInner {
             throw new MQClientException("tranExecutor is null", null);
         }
 
-        // ignore DelayTimeLevel parameter
+        // ignore DelayTimeLevel parameter 忽略延迟等级参数
         if (msg.getDelayTimeLevel() != 0) {
             MessageAccessor.clearProperty(msg, MessageConst.PROPERTY_DELAY_TIME_LEVEL);
         }
 
+        // 校验消息
         Validators.checkMessage(msg, this.defaultMQProducer);
 
         // 首先为消息添加属性，TRAN_MSG、PGROUP，分别表示消息为 prepare 消息、消息所属消息生产者组，设置消息生产者组的目的是在查询事务消息本地事务状态时，从该生产者组中随机选择一个消息生产者即可
@@ -1362,6 +1363,9 @@ public class DefaultMQProducerImpl implements MQProducerInner {
         return send(msg, this.defaultMQProducer.getSendMsgTimeout());
     }
 
+    /**
+     * 提交或回滚事务
+     */
     public void endTransaction(
             final SendResult sendResult,
             final LocalTransactionState localTransactionState,

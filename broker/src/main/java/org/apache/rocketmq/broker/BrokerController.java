@@ -423,6 +423,8 @@ public class BrokerController {
             if (!messageStoreConfig.isEnableDLegerCommitLog()) {
                 if (BrokerRole.SLAVE == this.messageStoreConfig.getBrokerRole()) {
                     if (this.messageStoreConfig.getHaMasterAddress() != null && this.messageStoreConfig.getHaMasterAddress().length() >= 6) {
+                        // 在 broker 启动时，如果 Broker 角色为 SLAVE 时将读取 Broker 配置文件中的 haMasterAddress 属性并更新 HAClient 的 masterAddress，如果角色为 SLAVE 并且 haMasterAddress 为空，
+                        // 启动并不会报错，但不会执行主从同步复制
                         this.messageStore.updateHaMasterAddress(this.messageStoreConfig.getHaMasterAddress());
                         this.updateMasterHAServerAddrPeriodically = false;
                     } else {
